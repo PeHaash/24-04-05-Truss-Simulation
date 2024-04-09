@@ -17,7 +17,7 @@ namespace Liz
 {
     public struct Point
     {
-        double x, y, z;
+        double x, y, z; 
     } 
     public struct pointInSpace { }
     public struct Node {
