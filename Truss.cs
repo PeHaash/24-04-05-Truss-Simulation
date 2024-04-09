@@ -210,23 +210,8 @@ namespace Liz
             var node = ProtoNodes[index];
             node.SupportType |= type;
             ProtoNodes[index] = node;
-            // same problem as in AddForce: ProtoNodes[NearestNode(p)].SupportType|= type; is not possible
+            // same problem as in AddForce: ProtoNodes[NearestNode(p)].SupportType|= type; is not possible   
         }
-
-
-        /*
-         * This codes can be implemented in better places, even in grasshopper
-            public void SetMassOnNode(double mass)
-            {
-                for (int i = 0; i < Nodes.Count; i++) Nodes[i].mass = mass;
-            }
-
-            public void SetStiffnessOnBeam(double stiff)
-            {
-                for (int i = 0; i < Beams.Count; i++) Beams[i].stifnees = stiff;
-            }
-        */
-
 
 
         void Compile()
@@ -238,6 +223,23 @@ namespace Liz
         {
             // do one step in the simulation
         }
+
+        // important NOTE!!!!
+        // for changing elements in an array of structs, you should do this:
+        /*
+            struct MyStruct
+                {
+                    public int Value;
+                    public void Increment() => Value++;
+                }
+
+            MyStruct[] myArray = new MyStruct[1];
+            myArray[0] = new MyStruct();
+
+            // Directly modifying the struct in the array
+            ref MyStruct item = ref myArray[0];  /// !!!!!
+            item.Increment();
+        */
 
         // private functions:
         private int NearestNode(Point3d p)
