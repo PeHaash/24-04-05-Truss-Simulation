@@ -13,22 +13,34 @@ using Grasshopper.Kernel;
 using Grasshopper.Kernel.Data;
 using Grasshopper.Kernel.Types;*/
 
+
+/*
+ * Here is the rules:
+ * We have only one class: Truss, for now
+ * Truss keeps both datas: uncompiled and compiled
+ * because, if we want to do some optimizations, it is better to just edit the compiled data, not copy it every time.
+ * so yes, we don't have a builder.
+ * However, later it might be useful to Have multiple trusses: for example if we don't want to have un-uniform masses
+ * but for now, only Liz.Truss
+ * and yes, it get copied all over the data set in the grasshopper. pfff
+ * and we add damper, free force, etc to our code first. Then we go for the GPU.
+*/
+
 namespace Liz
 {
-    public struct Point
+    public struct Triple
     {
-        double x, y, z; 
+        public double x, y, z;
     } 
-    public struct pointInSpace { }
     public struct Node {
-        Point3d Pos0;
-        Point3d Position;
-        Vector3d Velocity;
+        Triple Pos0;
+        Triple Position;
+        Triple Velocity;
         double Mass;
-        Vector3d ConstantForce; // only on some nodes!
-        Vector3d Force;
+        Triple ConstantForce; // only on some nodes!
+        Triple Force;
         int SupportType;
-        Vector3d ReactionForce; // only on some nodes!
+        Triple ReactionForce; // only on some nodes!
     }
     public struct Beam {
         int StartNode;
@@ -39,7 +51,7 @@ namespace Liz
     }
     public class Truss
     {
-        // compiled parts: data that can be manipulated!
+        // compiled parts: data that can  be manipulated!
         double Delta;
         int StepCount, MaxStep, NodeCount, BeamCount;
         Node[] Nodes;
