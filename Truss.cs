@@ -28,9 +28,15 @@ using Grasshopper.Kernel.Types;*/
 
 namespace Liz
 {
-    internal class Constants
+    internal class Default
     {
-        internal static double Mass { private set; get; } = 10;
+        internal const double Mass  = 10;
+        internal const  double Stiffness = 500;
+        internal static readonly double DeltaTime = 0.01;
+        internal static readonly int MaxStep = 100;
+        internal const double DamperConstant  = 20;
+        internal static readonly Vector3d ZeroVector = new Vector3d(0, 0, 0);
+        internal static readonly Point3d ZeroPoint  = new Point3d(0, 0, 0);
     }
     public class DisjointSet
     {
@@ -94,9 +100,9 @@ namespace Liz
         public ProtoNode(Point3d P0)
         {
             Pos0 = P0;
-            Force = new Vector3d();
+            Force = new Vector3d(0, 0, 0);// Default.ZeroVector;
             SupportType = 0;
-            Mass = Constants.Mass;
+            Mass = Default.Mass;
         }
     }
     public struct ProtoBeam
@@ -104,16 +110,22 @@ namespace Liz
         public Tuple<int, int> Link { internal set; get; }
         public double Stiffness { set; get; } // set is also OK man!!
         public double Length { internal set; get; }
+        public ProtoBeam(int a, int b, double initial_lenght, double stiff = Default.Stiffness)
+        {
+            Link = new Tuple<int, int>(a, b);
+            Stiffness = stiff;
+            Length = initial_lenght;
+        }
     }
     public class Truss
     {
         // general data:
-        public double DeltaTime { set; get; } = 0.001;
-        private int StepCount;
-        public int MaxStep { set; get; } = 300;
+        public double DeltaTime { set; get; } = Default.DeltaTime;
+        private int Iteration = 0;
+        public int MaxStep { set; get; } = Default.MaxStep;
         private int NodeCount;
         private int BeamCount;
-        public double DamperConstant { set; get; } = 20;
+        public double DamperConstant { set; get; } = Default.DamperConstant;
 
         // compiled data: this things are on the GPU!!
         public Node[] Nodes { private set; get; }
@@ -133,45 +145,43 @@ namespace Liz
         public Truss(List<Line> Beam_Lines, double Tolerance)
         {
             // classic constructor
+            ProtoNodes = new List<ProtoNode>();
+            ProtoBeams = new List<ProtoBeam>();
+
+            List<Point3d> points = new List<Point3d>();
+            DisjointSet dst = new DisjointSet(Beam_Lines.Count * 2);
+
+            foreach (Line t in Beam_Lines)
             {
-                ProtoNodes = new List<ProtoNode>();
-                ProtoBeams = new List<ProtoBeam>();
-
-                List<Point3d> points = new List<Point3d>();
-                DisjointSet dst = new DisjointSet(Beam_Lines.Count * 2);
-
-                foreach (Line t in Beam_Lines)
+                points.Add(t.From);
+                points.Add(t.To);
+            }
+            for (int i = 0; i < points.Count; i++)
+            {
+                for (int j = i + 1; j < points.Count; j++)
                 {
-                    points.Add(t.From);
-                    points.Add(t.To);
-                }
-                for (int i = 0; i < points.Count; i++)
-                {
-                    for (int j = i + 1; j < points.Count; j++)
+                    if (dst.FindParent(i) != dst.FindParent(j) && points[i].DistanceTo(points[j]) < Tolerance)
                     {
-                        if (dst.FindParent(i) != dst.FindParent(j) && points[i].DistanceTo(points[j]) < Tolerance)
-                        {
-                            dst.Join(i, j);
-                        }
+                        dst.Join(i, j);
                     }
                 }
-                int[] co_node = new int[points.Count]; // corresponding node for the root points
-                for (int i = 0; i < points.Count; i++)
+            }
+            int[] co_node = new int[points.Count]; // corresponding node for the root points
+            for (int i = 0; i < points.Count; i++)
+            {
+                if (dst.IsRoot(i))
                 {
-                    if (dst.IsRoot(i))
-                    {
-                        ProtoNodes.Add(new ProtoNode(points[i]));
-                        co_node[i] = ProtoNodes.Count - 1;
-                    }
+                    ProtoNodes.Add(new ProtoNode(points[i]));
+                    co_node[i] = ProtoNodes.Count - 1;
                 }
+            }
 
-                for (int i = 0; i < points.Count; i += 2)
-                {
-                    Beams.Add(new Beam(
-                      co_node[dst.FindParent(i)],
-                      co_node[dst.FindParent(i + 1)],
-                      Nodes[co_node[dst.FindParent(i)]].pos.DistanceTo(Nodes[co_node[dst.FindParent(i + 1)]].pos)));
-                }
+            for (int i = 0; i < points.Count; i += 2)
+            {
+                ProtoBeams.Add(new ProtoBeam(
+                    co_node[dst.FindParent(i)],
+                    co_node[dst.FindParent(i + 1)],
+                    ProtoNodes[co_node[dst.FindParent(i)]].Pos0.DistanceTo(ProtoNodes[co_node[dst.FindParent(i + 1)]].Pos0)));
             }
         }
         public Truss(Truss other)
@@ -183,20 +193,24 @@ namespace Liz
         public void AddForce(Point3d p, Vector3d v, double strenght)
         {
             // add a Force to the nearest Node
-            //v.Unitize();
-            //Nodes[NearestNode(p)].force += v * strenght;
+            v.Unitize();
+            // new code:
+            int index = NearestNode(p);
+            var node = ProtoNodes[index];
+            node.Force += v * strenght;
+            ProtoNodes[index] = node;
+            // old code: // cannot be done bc ProtoNode is a value type, not a reference type
+            // ProtoNodes[NearestNode(p)].Force += v * strenght; 
         }
 
         public void AddSupport(Point3d p, int type)
         {
             // add a Support to the nearest Node
-            //int index = NearestNode(p);
-            //Nodes[index].support_type |= type;
-            //for (int i = 5; i >= 0; i--)
-            //{
-            //    Nodes[index].support[i] |= (type % 2 == 1);
-            //    type /= 2;
-            //}
+            int index = NearestNode(p);
+            var node = ProtoNodes[index];
+            node.SupportType |= type;
+            ProtoNodes[index] = node;
+            // same problem as in AddForce: ProtoNodes[NearestNode(p)].SupportType|= type; is not possible
         }
 
 
