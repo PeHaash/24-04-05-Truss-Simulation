@@ -49,13 +49,33 @@ namespace Liz
         double SpringConstant;
         double InternalForce; // +: compression beam: push nodes, -: tension beam: pull nodes
     }
+    public struct ProtoNode
+    {
+        Triple Pos0;
+        Triple Force;
+        int SupportType;
+        double Mass;
+    }
+    public struct ProtoBeam
+    {
+        Tuple<int, int> Link;
+        
+    }
     public class Truss
     {
-        // compiled parts: data that can  be manipulated!
-        double Delta;
+        // general data:
+        double DeltaTime;
         int StepCount, MaxStep, NodeCount, BeamCount;
+        // compiled data: this things are on the GPU!!
         Node[] Nodes;
         Beam[] Beams;
+        int[] ForcedNodesIndexes;
+        int[] SupportedNodesIndexes;
+        // uncompiled data: This things are on the CPU! 
+        List<ProtoNode> ProtoNodes;
+        List<ProtoBeam> ProtoBeams;
+
+
 
 
 
