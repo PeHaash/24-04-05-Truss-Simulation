@@ -59,7 +59,8 @@ namespace Liz
     public struct ProtoBeam
     {
         Tuple<int, int> Link;
-        
+        double Stiffness;
+        double Length;
     }
     public class Truss
     {
@@ -74,6 +75,62 @@ namespace Liz
         // uncompiled data: This things are on the CPU! 
         List<ProtoNode> ProtoNodes;
         List<ProtoBeam> ProtoBeams;
+
+        // constructors:
+        public Truss(List<Point3d> Points, double MaxBeamLen) { }
+        public Truss(List<Line> Beams, double Tolerance) { }
+        public Truss(Truss other)
+        {
+            // copy constructor
+        }
+
+        // single features should be updated from Properties
+        public void AddForce(Point3d p, Vector3d v, double strenght)
+        {
+            // add a Force to the nearest Node
+            //v.Unitize();
+            //Nodes[NearestNode(p)].force += v * strenght;
+        }
+
+        public void AddSupport(Point3d p, int type)
+        {
+            // add a Support to the nearest Node
+            //int index = NearestNode(p);
+            //Nodes[index].support_type |= type;
+            //for (int i = 5; i >= 0; i--)
+            //{
+            //    Nodes[index].support[i] |= (type % 2 == 1);
+            //    type /= 2;
+            //}
+        }
+
+
+        /*
+         * This codes can be implemented in better places, even in grasshopper
+            public void SetMassOnNode(double mass)
+            {
+                for (int i = 0; i < Nodes.Count; i++) Nodes[i].mass = mass;
+            }
+
+            public void SetStiffnessOnBeam(double stiff)
+            {
+                for (int i = 0; i < Beams.Count; i++) Beams[i].stifnees = stiff;
+            }
+        */
+
+
+
+        void Compile()
+        {
+            // make code ready for gpu!
+        }
+
+        void Update()
+        {
+            // do one step in the simulation
+        }
+
+        /// Pre
 
 
 
