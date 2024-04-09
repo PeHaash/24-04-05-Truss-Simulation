@@ -15,7 +15,7 @@ using Grasshopper.Kernel.Types;*/
 
 
 /*
- * Here is the rules:
+ * Here are the rules:
  * We have only one class: Truss, for now
  * Truss keeps both datas: uncompiled and compiled
  * because, if we want to do some optimizations, it is better to just edit the compiled data, not copy it every time.
@@ -28,57 +28,152 @@ using Grasshopper.Kernel.Types;*/
 
 namespace Liz
 {
+    internal class Constants
+    {
+        internal static double Mass { private set; get; } = 10;
+    }
+    public class DisjointSet
+    {
+        private int[] Par;
+        //private int NumberOfSets;
+        //private int NumberOfElements;
+
+        public DisjointSet(int n)
+        {
+            Par = new int[n];
+            for (int i = 0; i < n; i++) Par[i] = -1;
+            // NumberOfSets = n;
+            // NumberOfElements = n;
+        }
+        public int FindParent(int p)
+        {
+            if (Par[p] == -1) return p;
+            return Par[p] = FindParent(Par[p]);
+        }
+        public void Join(int a, int b)
+        {
+            if (FindParent(a) != FindParent(b))
+            {
+                Par[FindParent(a)] = FindParent(b);
+                // NumberOfSets--;
+            }
+        }
+        public bool IsRoot(int a)
+        {
+            return Par[a] == -1;
+        }
+
+    }
     public struct Triple
     {
         public double x, y, z;
     } 
     public struct Node {
-        Triple Pos0;
-        Triple Position;
-        Triple Velocity;
-        double Mass;
-        Triple ConstantForce; // only on some nodes!
-        Triple Force;
-        int SupportType;
-        Triple ReactionForce; // only on some nodes!
+        public Triple Pos0 { internal set; get; }
+        public Triple Position { internal set; get; }
+        public Triple Velocity { internal set; get; }
+        public double Mass { internal set; get; }
+        public Triple ConstantForce { internal set; get; } // only on some nodes!
+        public Triple Force { internal set; get; }
+        public int SupportType { internal set; get; }
+        public Triple ReactionForce { internal set; get; } // only on some nodes!
     }
     public struct Beam {
-        int StartNode;
-        int EndNode;
-        public double InitialLength; // { get; private set; }
-        double SpringConstant;
-        double InternalForce; // +: compression beam: push nodes, -: tension beam: pull nodes
+        public int StartNode { internal set; get; }
+        public int EndNode { internal set; get; }
+        public double InitialLength { internal set; get; }
+        public double SpringConstant { internal set; get; }
+        public double InternalForce { internal set; get; } // +: compression beam: push nodes, -: tension beam: pull nodes
     }
     public struct ProtoNode
     {
-        Triple Pos0;
-        Triple Force;
-        int SupportType;
-        double Mass;
+        public Point3d Pos0 { internal set; get; } // shayad beshe inam public set kard. 
+        public Vector3d Force { internal set; get; }
+        public int SupportType { internal set; get; }
+        public double Mass { set; get; }
+        public ProtoNode(Point3d P0)
+        {
+            Pos0 = P0;
+            Force = new Vector3d();
+            SupportType = 0;
+            Mass = Constants.Mass;
+        }
     }
     public struct ProtoBeam
     {
-        Tuple<int, int> Link;
-        double Stiffness;
-        double Length;
+        public Tuple<int, int> Link { internal set; get; }
+        public double Stiffness { set; get; } // set is also OK man!!
+        public double Length { internal set; get; }
     }
     public class Truss
     {
         // general data:
-        double DeltaTime;
-        int StepCount, MaxStep, NodeCount, BeamCount;
+        public double DeltaTime { set; get; } = 0.001;
+        private int StepCount;
+        public int MaxStep { set; get; } = 300;
+        private int NodeCount;
+        private int BeamCount;
+        public double DamperConstant { set; get; } = 20;
+
         // compiled data: this things are on the GPU!!
-        Node[] Nodes;
-        Beam[] Beams;
-        int[] ForcedNodesIndexes;
-        int[] SupportedNodesIndexes;
+        public Node[] Nodes { private set; get; }
+        public Beam[] Beams { private set; get; }
+        private int[] ForcedNodesIndexes;
+        private int[] SupportedNodesIndexes;
+
         // uncompiled data: This things are on the CPU! 
-        List<ProtoNode> ProtoNodes;
-        List<ProtoBeam> ProtoBeams;
+        public List<ProtoNode> ProtoNodes { private set; get; }
+        public List<ProtoBeam> ProtoBeams { private set; get; }
 
         // constructors:
-        public Truss(List<Point3d> Points, double MaxBeamLen) { }
-        public Truss(List<Line> Beams, double Tolerance) { }
+        public Truss(List<Point3d> Points, double MaxBeamLen)
+        {
+            
+        }
+        public Truss(List<Line> Beam_Lines, double Tolerance)
+        {
+            // classic constructor
+            {
+                ProtoNodes = new List<ProtoNode>();
+                ProtoBeams = new List<ProtoBeam>();
+
+                List<Point3d> points = new List<Point3d>();
+                DisjointSet dst = new DisjointSet(Beam_Lines.Count * 2);
+
+                foreach (Line t in Beam_Lines)
+                {
+                    points.Add(t.From);
+                    points.Add(t.To);
+                }
+                for (int i = 0; i < points.Count; i++)
+                {
+                    for (int j = i + 1; j < points.Count; j++)
+                    {
+                        if (dst.FindParent(i) != dst.FindParent(j) && points[i].DistanceTo(points[j]) < Tolerance)
+                        {
+                            dst.Join(i, j);
+                        }
+                    }
+                }
+                int[] co_node = new int[points.Count]; // corresponding node for the root points
+                for (int i = 0; i < points.Count; i++)
+                {
+                    if (dst.IsRoot(i))
+                    {
+                        ProtoNodes.Add(new ProtoNode(points[i]));
+                        co_node[i] = ProtoNodes.Count - 1;
+                    }
+                }
+
+                for (int i = 0; i < points.Count; i += 2)
+                {
+                    Beams.Add(new Beam(
+                      co_node[dst.FindParent(i)],
+                      co_node[dst.FindParent(i + 1)],
+                      Nodes[co_node[dst.FindParent(i)]].pos.DistanceTo(Nodes[co_node[dst.FindParent(i + 1)]].pos)));
+                }
+            }
+        }
         public Truss(Truss other)
         {
             // copy constructor
@@ -130,8 +225,21 @@ namespace Liz
             // do one step in the simulation
         }
 
-        /// Pre
-
+        // private functions:
+        private int NearestNode(Point3d p)
+        {
+            int min_ind = 0;
+            double min_dis = p.DistanceTo(ProtoNodes[0].Pos0);
+            for (int i = 1; i < ProtoNodes.Count; i++)
+            {
+                if (p.DistanceTo(ProtoNodes[i].Pos0) < min_dis)
+                {
+                    min_dis = p.DistanceTo(ProtoNodes[i].Pos0);
+                    min_ind = i;
+                }
+            }
+            return min_ind;
+        }
 
 
 
@@ -142,7 +250,7 @@ namespace Liz
 
 namespace Truss
 {
-    public class DisjointSet
+    /*public class DisjointSet
     {
         private int[] Par;
         //private int NumberOfSets;
@@ -173,7 +281,7 @@ namespace Truss
             return Par[a] == -1;
         }
 
-    }
+    }*/
 
     public class CompiledTruss
     {
