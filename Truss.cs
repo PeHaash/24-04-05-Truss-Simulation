@@ -90,6 +90,14 @@ namespace Liz
         public double InitialLength { internal set; get; }
         public double SpringConstant { internal set; get; }
         public double InternalForce { internal set; get; } // +: compression beam: push nodes, -: tension beam: pull nodes
+        internal Beam(int startnode, int endnode, double initlen, double sprconst)
+        {
+            StartNode = startnode;
+            EndNode = endnode;
+            InitialLength = initlen;
+            SpringConstant = sprconst;
+            InternalForce = 0;
+        }
     }
     public struct ProtoNode
     {
@@ -115,6 +123,10 @@ namespace Liz
             Link = new Tuple<int, int>(a, b);
             Stiffness = stiff;
             Length = initial_lenght;
+        }
+        internal Beam ToBeam()
+        {
+            return new Beam(Link.Item1, Link.Item2, Length, Stiffness);
         }
     }
     public class Truss
@@ -232,11 +244,19 @@ namespace Liz
             NodeCount = ProtoNodes.Count;
             BeamCount = ProtoBeams.Count;
             Nodes = new Node[NodeCount];
-            Beams = new Beam[NodeCount];
+            Beams = new Beam[BeamCount];
             ForcedNodesIndexes = new int[ProtoNodes.Count(item => !item.Force.IsZero)]; // count number of non, zero forces
             SupportedNodesIndexes = new int[ProtoNodes.Count(item => item.SupportType != 0)]; // like-wise, for supports
-
-
+            // this is also possible with LINQ, but I prefer to keep it simple
+            int fn_po = 0, sn_po = 0;
+            for(int i = 0; i < NodeCount; i++)
+            {
+                Nodes[i] = ProtoNodes[i].ToNode();
+                if (!ProtoNodes[i].Force.IsZero) ForcedNodesIndexes[fn_po++] = i;
+                if (ProtoNodes[i].SupportType != 0) SupportedNodesIndexes[sn_po++] = i;
+            }
+            for (int i = 0; i < BeamCount; i++) Beams[i] = ProtoBeams[i].ToBeam();
+            // int[] intArray = objects.Select(obj => obj.ToInt()).ToArray();
         }
 
         void Update()
