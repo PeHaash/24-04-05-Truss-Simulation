@@ -31,9 +31,9 @@ namespace Liz
     internal class Default
     {
         internal const double Mass  = 10;
-        internal const  double Stiffness = 500;
-        internal static readonly double DeltaTime = 0.01;
-        internal static readonly int MaxStep = 100;
+        internal const double Stiffness = 500;
+        internal const double DeltaTime = 0.01;
+        internal const int MaxStep = 100;
         internal const double DamperConstant  = 20;
         internal static readonly Vector3d ZeroVector = new Vector3d(0, 0, 0);
         internal static readonly Point3d ZeroPoint  = new Point3d(0, 0, 0);
@@ -187,6 +187,17 @@ namespace Liz
         public Truss(Truss other)
         {
             // copy constructor
+            DeltaTime = other.DeltaTime;
+            Iteration = other.Iteration;
+            NodeCount = other.NodeCount;
+            BeamCount = other.BeamCount;
+            DamperConstant = other.DamperConstant;
+            Nodes = (Node[])other.Nodes.Clone();
+            Beams = (Beam[])other.Beams.Clone();
+            ForcedNodesIndexes = (int[])other.ForcedNodesIndexes.Clone();
+            SupportedNodesIndexes = (int[])other.SupportedNodesIndexes.Clone();
+            ProtoNodes = other.ProtoNodes.ToList();
+            ProtoBeams = other.ProtoBeams.ToList();
         }
 
         // single features should be updated from Properties
@@ -217,6 +228,15 @@ namespace Liz
         void Compile()
         {
             // make code ready for gpu!
+            Iteration = 0;
+            NodeCount = ProtoNodes.Count;
+            BeamCount = ProtoBeams.Count;
+            Nodes = new Node[NodeCount];
+            Beams = new Beam[NodeCount];
+            ForcedNodesIndexes = new int[ProtoNodes.Count(item => !item.Force.IsZero)]; // count number of non, zero forces
+            SupportedNodesIndexes = new int[ProtoNodes.Count(item => item.SupportType != 0)]; // like-wise, for supports
+
+
         }
 
         void Update()
