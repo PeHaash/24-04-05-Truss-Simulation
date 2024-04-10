@@ -535,7 +535,7 @@ namespace Truss
             Beams = new List<Beam>();
 
             List<Point3d> points = new List<Point3d>();
-            DisjointSet dst = new DisjointSet(beam_lines.Count * 2);
+            Liz.DisjointSet dst = new Liz.DisjointSet(beam_lines.Count * 2);
 
             foreach (Line t in beam_lines)
             {
