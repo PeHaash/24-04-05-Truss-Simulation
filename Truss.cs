@@ -73,6 +73,15 @@ namespace Liz
     public struct Triple
     {
         public double x, y, z;
+        internal Triple(Point3d p)
+        {
+            x = p.X; y = p.Y; z = p.Z;
+        }
+        internal Triple(Vector3d v)
+        {
+            x = v.X; y = v.Y; z = v.Z;
+        }
+
     } 
     public struct Node {
         public Triple Pos0 { internal set; get; }
@@ -83,6 +92,17 @@ namespace Liz
         public Triple Force { internal set; get; }
         public int SupportType { internal set; get; }
         public Triple ReactionForce { internal set; get; } // only on some nodes!
+        internal Node(Point3d p0, Vector3d force, double mass, int support_type)
+        {
+            Pos0 = new Triple(p0);// { x = p0.X, y = p0.Y, z = p0.Z };
+            Position = new Triple(p0);// { x = p0.X, y = p0.Y, z = p0.Z };
+            Velocity = new Triple();
+            Mass = mass;
+            ConstantForce = new Triple(force);
+            Force = new Triple();
+            SupportType = support_type;
+            ReactionForce = new Triple();
+        }
     }
     public struct Beam {
         public int StartNode { internal set; get; }
@@ -111,6 +131,10 @@ namespace Liz
             Force = new Vector3d(0, 0, 0);// Default.ZeroVector;
             SupportType = 0;
             Mass = Default.Mass;
+        }
+        internal Node ToNode()
+        {
+            return new Node(Pos0, Force, Mass, SupportType);
         }
     }
     public struct ProtoBeam
