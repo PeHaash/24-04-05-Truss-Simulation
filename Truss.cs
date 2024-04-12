@@ -109,6 +109,10 @@ namespace Liz
         {
             return new Triple(a.x - b.x, a.y - b.y, a.z - b.z);
         }
+        public static Triple operator *(Triple a, double b)
+        {
+            return new Triple(a.x * b, a.y * b, a.z * b);
+        }
     } 
     public struct Node {
         public Triple Pos0 { internal set; get; }
@@ -129,6 +133,16 @@ namespace Liz
             Force = new Triple();
             SupportType = support_type;
             ReactionForce = new Triple();
+        }
+        internal void UpdateReactionForce()
+        {
+            Triple nReactionForce = new Triple(
+                ((SupportType & 4) != 0) ? -Force.x: 0,
+                ((SupportType & 2) != 0) ? -Force.y : 0,
+                ((SupportType & 1) != 0) ? -Force.z : 0
+                );
+            ReactionForce = nReactionForce;
+            Force += ReactionForce;
         }
     }
     public struct Beam {
@@ -313,9 +327,8 @@ namespace Liz
         public void Update()
         {
             if (Iteration == MaxStep) return;
-            //for(int i = 0; i < BeamCount; i++) Beam[i].Update();
-            //for (int i = 0; i < ForcedNodesIndexes.Length; i++) Node[i].UpdateForces();
-            for(int i = 0; i < BeamCount; i++)
+            // update beams, position is input, force is output
+            for (int i = 0; i < BeamCount; i++)
             {
                 double delta_len = Triple.Distance(Nodes[Beams[i].StartNode].Position, Nodes[Beams[i].EndNode].Position) 
                     - Beams[i].InitialLength;
@@ -324,10 +337,25 @@ namespace Liz
                 // vector from start to end
                 Triple vector_force = new Triple(Nodes[Beams[i].StartNode].Position, Nodes[Beams[i].EndNode].Position, Beams[i].InternalForce);
                 // comp -> int mosbat -> vector force mosbat be samte end;
-                Nodes[Beams[i].StartNode].Force -= vector_force;
+                Nodes[Beams[i].StartNode].Force -= vector_force; /// we can make methods like .AddTo() or .SubtractFrom() but...
                 Nodes[Beams[i].EndNode].Force += vector_force;
-
             }
+
+            // add the constant force to some nodes with force
+            for(int i = 0; i < ForcedNodesIndexes.Length; i++)
+                Nodes[ForcedNodesIndexes[i]].Force += Nodes[ForcedNodesIndexes[i]].ConstantForce;
+
+            // enforce damper constant to all nodes
+            for (int i = 0; i < NodeCount; i++)
+                Nodes[i].Force -= Nodes[i].Velocity * DamperConstant;
+
+
+            for(int i = 0; i < SupportedNodesIndexes.Length; i++)
+            {
+                Nodes[SupportedNodesIndexes[i]].UpdateReactionForce();
+            }
+                
+
         }
             
 
