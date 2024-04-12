@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.Remoting.Services;
 using System.Text;
 using System.Threading.Tasks;
 
@@ -80,6 +81,19 @@ namespace Liz
         internal Triple(Vector3d v)
         {
             x = v.X; y = v.Y; z = v.Z;
+        }
+        internal Triple(Triple start, Triple end, double len)
+        {
+            // make a vector, from start to end with a set len
+            x = end.x - start.x; y = end.y - start.y; z = end.z - start.z;
+            double t = Math.Sqrt(Math.Pow(x, 2) + Math.Pow(y, 2) + Math.Pow(z, 2)); // now_len, here!
+            if (t == 0) return; // an unfortunate event, we just put it under the rug :/
+            t = len / t; // to adjust the length
+            x *= t; y *= t; z *= t;
+        }
+        internal static double Distance(Triple a, Triple b)
+        {
+            return Math.Sqrt(Math.Pow(a.x - b.x, 2) + Math.Pow(a.y - b.y, 2) + Math.Pow(a.z - b.z, 2));
         }
 
     } 
@@ -280,13 +294,25 @@ namespace Liz
                 if (ProtoNodes[i].SupportType != 0) SupportedNodesIndexes[sn_po++] = i;
             }
             for (int i = 0; i < BeamCount; i++) Beams[i] = ProtoBeams[i].ToBeam();
-            // int[] intArray = objects.Select(obj => obj.ToInt()).ToArray();
+            // int[] intArray = objects.Select(obj => obj.ToInt()).ToArray(); sample in LINQ
         }
 
         void Update()
         {
-            // do one step in the simulation
+            if (Iteration == MaxStep) return;
+            //for(int i = 0; i < BeamCount; i++) Beam[i].Update();
+            //for (int i = 0; i < ForcedNodesIndexes.Length; i++) Node[i].UpdateForces();
+            for(int i = 0; i < BeamCount; i++)
+            {
+                double delta_len = Triple.Distance(Nodes[Beams[i].StartNode].Position, Nodes[Beams[i].EndNode].Position) 
+                    - Beams[i].InitialLength;
+                // deltaLen <0 : newLen is shorter --> compression --> InternalForce should be >0, vice versa
+                Beams[i].InternalForce = -Beams[i].SpringConstant * delta_len;
+
+
+            }
         }
+            
 
         // important NOTE!!!!
         // for changing elements in an array of structs, you should do this:
