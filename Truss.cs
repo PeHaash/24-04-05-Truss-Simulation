@@ -74,6 +74,12 @@ namespace Liz
     public struct Triple
     {
         public double x, y, z;
+        public Triple(double x, double y, double z)
+        {
+            this.x = x;
+            this.y = y;
+            this.z = z;
+        }
         internal Triple(Point3d p)
         {
             x = p.X; y = p.Y; z = p.Z;
@@ -95,7 +101,14 @@ namespace Liz
         {
             return Math.Sqrt(Math.Pow(a.x - b.x, 2) + Math.Pow(a.y - b.y, 2) + Math.Pow(a.z - b.z, 2));
         }
-
+        public static Triple operator +(Triple a, Triple b)
+        {
+            return new Triple(a.x + b.x, a.y + b.y, a.z + b.z);
+        }
+        public static Triple operator -(Triple a, Triple b)
+        {
+            return new Triple(a.x - b.x, a.y - b.y, a.z - b.z);
+        }
     } 
     public struct Node {
         public Triple Pos0 { internal set; get; }
@@ -275,7 +288,7 @@ namespace Liz
         }
 
 
-        void Compile()
+        public void Compile()
         {
             // make code ready for gpu!
             Iteration = 0;
@@ -297,7 +310,7 @@ namespace Liz
             // int[] intArray = objects.Select(obj => obj.ToInt()).ToArray(); sample in LINQ
         }
 
-        void Update()
+        public void Update()
         {
             if (Iteration == MaxStep) return;
             //for(int i = 0; i < BeamCount; i++) Beam[i].Update();
@@ -308,7 +321,11 @@ namespace Liz
                     - Beams[i].InitialLength;
                 // deltaLen <0 : newLen is shorter --> compression --> InternalForce should be >0, vice versa
                 Beams[i].InternalForce = -Beams[i].SpringConstant * delta_len;
-
+                // vector from start to end
+                Triple vector_force = new Triple(Nodes[Beams[i].StartNode].Position, Nodes[Beams[i].EndNode].Position, Beams[i].InternalForce);
+                // comp -> int mosbat -> vector force mosbat be samte end;
+                Nodes[Beams[i].StartNode].Force -= vector_force;
+                Nodes[Beams[i].EndNode].Force += vector_force;
 
             }
         }
