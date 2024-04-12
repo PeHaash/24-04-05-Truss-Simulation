@@ -222,13 +222,16 @@ namespace Liz
         // constructors:
         public Truss(List<Point3d> Points, double MaxBeamLen)
         {
-            
+            // another constructor
+            BeamCount = NodeCount = 0;
+
         }
         public Truss(List<Line> Beam_Lines, double Tolerance)
         {
             // classic constructor
             ProtoNodes = new List<ProtoNode>();
             ProtoBeams = new List<ProtoBeam>();
+            BeamCount = NodeCount = 0;
 
             List<Point3d> points = new List<Point3d>();
             DisjointSet dst = new DisjointSet(Beam_Lines.Count * 2);
@@ -274,12 +277,12 @@ namespace Liz
             NodeCount = other.NodeCount;
             BeamCount = other.BeamCount;
             DamperConstant = other.DamperConstant;
-            Nodes = (Node[])other.Nodes.Clone();
-            Beams = (Beam[])other.Beams.Clone();
-            ForcedNodesIndexes = (int[])other.ForcedNodesIndexes.Clone();
-            SupportedNodesIndexes = (int[])other.SupportedNodesIndexes.Clone();
-            ProtoNodes = other.ProtoNodes.ToList();
-            ProtoBeams = other.ProtoBeams.ToList();
+            if (other.Nodes != null) Nodes = (Node[])other.Nodes.Clone();
+            if (other.Beams != null) Beams = (Beam[])other.Beams.Clone();
+            if (other.ForcedNodesIndexes != null) ForcedNodesIndexes = (int[])other.ForcedNodesIndexes.Clone();
+            if (other.SupportedNodesIndexes != null) SupportedNodesIndexes = (int[])other.SupportedNodesIndexes.Clone();
+            if (other.ProtoNodes != null) ProtoNodes = other.ProtoNodes.ToList();
+            if (other.ProtoBeams != null) ProtoBeams = other.ProtoBeams.ToList();
         }
 
         // single features should be updated from Properties
