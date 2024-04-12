@@ -97,6 +97,10 @@ namespace Liz
             t = len / t; // to adjust the length
             x *= t; y *= t; z *= t;
         }
+        internal void SetZero()
+        {
+            x = y = z = 0;
+        }
         internal static double Distance(Triple a, Triple b)
         {
             return Math.Sqrt(Math.Pow(a.x - b.x, 2) + Math.Pow(a.y - b.y, 2) + Math.Pow(a.z - b.z, 2));
@@ -113,12 +117,13 @@ namespace Liz
         {
             return new Triple(a.x * b, a.y * b, a.z * b);
         }
+        
     } 
     public struct Node {
         public Triple Pos0 { internal set; get; }
         public Triple Position { internal set; get; }
         public Triple Velocity { internal set; get; }
-        public double Mass { internal set; get; }
+        public double OneOverMass { internal set; get; }
         public Triple ConstantForce { internal set; get; } // only on some nodes!
         public Triple Force { internal set; get; }
         public int SupportType { internal set; get; }
@@ -128,7 +133,7 @@ namespace Liz
             Pos0 = new Triple(p0);// { x = p0.X, y = p0.Y, z = p0.Z };
             Position = new Triple(p0);// { x = p0.X, y = p0.Y, z = p0.Z };
             Velocity = new Triple();
-            Mass = mass;
+            OneOverMass = 1/mass;
             ConstantForce = new Triple(force);
             Force = new Triple();
             SupportType = support_type;
@@ -349,12 +354,20 @@ namespace Liz
             for (int i = 0; i < NodeCount; i++)
                 Nodes[i].Force -= Nodes[i].Velocity * DamperConstant;
 
-
+            // make nodes with support 0 in force, put them in the ReactionForce (one of the main outputs!)
             for(int i = 0; i < SupportedNodesIndexes.Length; i++)
-            {
                 Nodes[SupportedNodesIndexes[i]].UpdateReactionForce();
+
+            for(int i = 0; i < NodeCount; i++)
+            {
+                //Acceleration[i] = Force[i] / Mass[i]; // f = m.a
+                //Velocity[i] += Acceleration[i] * Delta; 
+                Nodes[i].Velocity += Nodes[i].Force * Nodes[i].OneOverMass * DeltaTime;
+                Nodes[i].Position += Nodes[i].Velocity * DeltaTime;
+                Nodes[i].Force.SetZero();
             }
-                
+
+
 
         }
             
