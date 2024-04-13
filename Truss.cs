@@ -93,13 +93,13 @@ namespace Liz
             // make a vector, from start to end with a set len
             x = end.x - start.x; y = end.y - start.y; z = end.z - start.z;
             double t = Math.Sqrt(Math.Pow(x, 2) + Math.Pow(y, 2) + Math.Pow(z, 2)); // now_len, here!
-            if (t == 0) return; // an unfortunate event, we just put it under the rug :/
+            //if (t == 0) return; // an unfortunate event, we just put it under the rug :/
             t = len / t; // to adjust the length
             x *= t; y *= t; z *= t;
         }
         internal void SetZero()
         {
-            x = y = z = 0;
+            x = 0; y = 0; z = 0;
         }
         internal static double Distance(Triple a, Triple b)
         {
@@ -147,7 +147,7 @@ namespace Liz
                 ((SupportType & 1) != 0) ? -Force.z : 0
                 );
             ReactionForce = nReactionForce;
-            Force += ReactionForce;
+            //Force += ReactionForce;
         }
     }
     public struct Beam {
@@ -334,6 +334,7 @@ namespace Liz
 
         public void Update()
         {
+            
             if (Iteration == MaxStep) return;
             // update beams, position is input, force is output
             for (int i = 0; i < BeamCount; i++)
@@ -343,12 +344,20 @@ namespace Liz
                 // deltaLen <0 : newLen is shorter --> compression --> InternalForce should be >0, vice versa
                 Beams[i].InternalForce = -Beams[i].SpringConstant * delta_len;
                 // vector from start to end
+                Triple vectorforce2 = new Triple();
+                vectorforce2 += Nodes[Beams[i].EndNode].Position;
+                vectorforce2 -= Nodes[Beams[i].StartNode].Position;
+                double tt = Triple.Distance(vectorforce2, new Triple());
+                vectorforce2 *= (1/tt);
+                vectorforce2 *= Beams[i].InternalForce;
+
                 Triple vector_force = new Triple(Nodes[Beams[i].StartNode].Position, Nodes[Beams[i].EndNode].Position, Beams[i].InternalForce);
                 // comp -> int mosbat -> vector force mosbat be samte end;
-                Nodes[Beams[i].StartNode].Force -= vector_force; /// we can make methods like .AddTo() or .SubtractFrom() but...
-                Nodes[Beams[i].EndNode].Force += vector_force;
+                Nodes[Beams[i].StartNode].Force -= vectorforce2; /// we can make methods like .AddTo() or .SubtractFrom() but...
+                Nodes[Beams[i].EndNode].Force += vectorforce2;
             }
 
+            /* AAAAAA
             // add the constant force to some nodes with force
             for(int i = 0; i < ForcedNodesIndexes.Length; i++)
                 Nodes[ForcedNodesIndexes[i]].Force += Nodes[ForcedNodesIndexes[i]].ConstantForce;
@@ -358,16 +367,23 @@ namespace Liz
                 Nodes[i].Force -= Nodes[i].Velocity * DamperConstant;
 
             // make nodes with support 0 in force, put them in the ReactionForce (one of the main outputs!)
-            for(int i = 0; i < SupportedNodesIndexes.Length; i++)
+            for (int i = 0; i < SupportedNodesIndexes.Length; i++)
+            {
                 Nodes[SupportedNodesIndexes[i]].UpdateReactionForce();
+                Nodes[SupportedNodesIndexes[i]].Force += Nodes[SupportedNodesIndexes[i]].ReactionForce;
+            }*/
 
             for(int i = 0; i < NodeCount; i++)
             {
+                Nodes[i].Force += Nodes[i].ConstantForce; // AA
+                Nodes[i].Force -= Nodes[i].Velocity * DamperConstant; // AA
+                Nodes[i].UpdateReactionForce(); /// AA
+                Nodes[i].Force += Nodes[i].ReactionForce; /// AAA
                 //Acceleration[i] = Force[i] / Mass[i]; // f = m.a
                 //Velocity[i] += Acceleration[i] * Delta; 
                 Nodes[i].Velocity += Nodes[i].Force * Nodes[i].OneOverMass * DeltaTime;
                 Nodes[i].Position += Nodes[i].Velocity * DeltaTime;
-                Nodes[i].Force.SetZero();
+                Nodes[i].Force = new Triple();
             }
 
 
@@ -417,38 +433,38 @@ namespace Liz
 
 namespace Truss
 {
-    /*public class DisjointSet
-    {
-        private int[] Par;
-        //private int NumberOfSets;
-        //private int NumberOfElements;
+    ///*public class DisjointSet
+    //{
+    //    private int[] Par;
+    //    //private int NumberOfSets;
+    //    //private int NumberOfElements;
 
-        public DisjointSet(int n)
-        {
-            Par = new int[n];
-            for (int i = 0; i < n; i++) Par[i] = -1;
-            // NumberOfSets = n;
-            // NumberOfElements = n;
-        }
-        public int FindParent(int p)
-        {
-            if (Par[p] == -1) return p;
-            return Par[p] = FindParent(Par[p]);
-        }
-        public void Join(int a, int b)
-        {
-            if (FindParent(a) != FindParent(b))
-            {
-                Par[FindParent(a)] = FindParent(b);
-                // NumberOfSets--;
-            }
-        }
-        public bool IsRoot(int a)
-        {
-            return Par[a] == -1;
-        }
+    //    public DisjointSet(int n)
+    //    {
+    //        Par = new int[n];
+    //        for (int i = 0; i < n; i++) Par[i] = -1;
+    //        // NumberOfSets = n;
+    //        // NumberOfElements = n;
+    //    }
+    //    public int FindParent(int p)
+    //    {
+    //        if (Par[p] == -1) return p;
+    //        return Par[p] = FindParent(Par[p]);
+    //    }
+    //    public void Join(int a, int b)
+    //    {
+    //        if (FindParent(a) != FindParent(b))
+    //        {
+    //            Par[FindParent(a)] = FindParent(b);
+    //            // NumberOfSets--;
+    //        }
+    //    }
+    //    public bool IsRoot(int a)
+    //    {
+    //        return Par[a] == -1;
+    //    }
 
-    }*/
+    //}*
 
     public class CompiledTruss
     {
@@ -541,10 +557,10 @@ namespace Truss
 
         public void Update(double damper) {
             // delete all forces. 
-            /*for (int i = 0; i < NodeCount; i++)
-            {
-                Force[i] = new Vector3d(0, 0, 0);
-            }*/
+            ///*for (int i = 0; i < NodeCount; i++)
+            //{
+            //    Force[i] = new Vector3d(0, 0, 0);
+            //}*
 
             // update beams, point come, force goes
             for (int i = 0; i < BeamCount; i++)
@@ -677,7 +693,7 @@ namespace Truss
         private List<Node> Nodes;
         private List<Beam> Beams;
         private double DeltaTime = DefaultDeltaTime;
-        private double Damping = 5;
+        //private double Damping = 5;
 
         // Constructors
         public Truss(List<Line> beam_lines, double tolerance)
