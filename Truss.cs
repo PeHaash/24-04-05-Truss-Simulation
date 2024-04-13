@@ -383,7 +383,7 @@ namespace Liz
                 //Velocity[i] += Acceleration[i] * Delta; 
                 Nodes[i].Velocity += Nodes[i].Force * Nodes[i].OneOverMass * DeltaTime;
                 Nodes[i].Position += Nodes[i].Velocity * DeltaTime;
-                Nodes[i].Force = new Triple();
+                Nodes[i].Force = new Triple(); // we are always working with the copies of structs here :/
             }
 
 
