@@ -12,6 +12,9 @@ using ILGPU;
 using ILGPU.Algorithms;
 using ILGPU.Runtime;
 using ILGPU.IR.Types;
+using ILGPU.Runtime.OpenCL;
+using ILGPU.Runtime.Cuda;
+using ILGPU.Runtime.CPU;
 
 /*using Grasshopper;
 using Grasshopper.Kernel;
@@ -223,8 +226,12 @@ namespace Liz
         // compiled data: this things are on the GPU!!, and then they will be copied to the compiled part
         Context context;
         Accelerator device;
+        private MemoryBuffer1D<Node, Stride1D.Dense> gpuNodes;
+        private MemoryBuffer1D<Beam, Stride1D.Dense> gpuBeams;
+        private MemoryBuffer1D<int,  Stride1D.Dense> gpuForcedNodesIndexes;
+        private MemoryBuffer1D<int,  Stride1D.Dense> gpuSupportedNodesIndexes;
 
-        // uncompiled data: This things are on the CPU! 
+        // uncompiled data: This things are on the CPU, and ready to be changed 
         public List<ProtoNode> ProtoNodes { private set; get; }
         public List<ProtoBeam> ProtoBeams { private set; get; }
 
@@ -493,10 +500,37 @@ namespace Liz
             item.Increment();
         */
 
-        private int ILGPU_CL_Compile(int _ = 0)
+        private int ILGPU_Compile(int _ = 0)
         {
             CPU_Compile();
-            ContextAllocated = true;
+            if (!ContextAllocated)
+            {
+                context = Context.Create(builder => builder.Default().EnableAlgorithms());
+                if(DeviceType == 2)
+                    device = context.GetCPUDevice(0).CreateAccelerator(context);
+                if(DeviceType == 3)
+                    device = context.GetCLDevice(0).CreateAccelerator(context);
+                if (DeviceType == 4)
+                    device = context.GetCudaDevice(0).CreateAccelerator(context);
+                
+                ContextAllocated = true;
+            }
+            else
+            {
+                // we have came here before, so we should despose the previous things on GPU to avoid memmory leak ?!
+                gpuNodes.Dispose();
+                gpuBeams.Dispose();
+                gpuForcedNodesIndexes.Dispose();
+                gpuSupportedNodesIndexes.Dispose();
+            }
+
+            // now send stuff into the GPU!
+            // we keep these here, because it may 
+            gpuNodes = device.Allocate1D(Nodes);
+            gpuBeams = device.Allocate1D(Beams);
+            gpuForcedNodesIndexes = device.Allocate1D(ForcedNodesIndexes);
+            gpuSupportedNodesIndexes = device.Allocate1D(SupportedNodesIndexes);
+            // end sending them
             return 0;
         }
 
@@ -535,29 +569,26 @@ namespace Liz
                 case "ThreadCPU":
                     DeviceType = 1; break;
                 default:
-                    DeviceType = 4; break;
+                    DeviceType = 0; break;
             }
         }
 
         private void SetDeviceFunctions()
         {
-            switch(DeviceType)
+            if(DeviceType >= 2)
             {
-                case 3:
-                    // opencl
-                    Compile = ILGPU_CL_Compile;
-                    Update = ILGPU_Update;
-                    break;
-                case 1:
-                    Compile = CPU_Compile;
-                    Update = Parallel_Update;
-                    break;
-
-                default:
-                    Compile = CPU_Compile;
-                    Update = CPU_Update;
-                    break;
-                
+                Compile = ILGPU_Compile;
+                Update = ILGPU_Update;
+            }
+            else if(DeviceType == 1)
+            {
+                Compile = CPU_Compile;
+                Update = Parallel_Update;
+            }
+            else
+            {
+                Compile = CPU_Compile;
+                Update = CPU_Update;
             }
         }
 
