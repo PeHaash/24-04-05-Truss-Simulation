@@ -100,19 +100,22 @@ namespace Liz
         {
             // make a vector, from start to end with a set len
             x = end.x - start.x; y = end.y - start.y; z = end.z - start.z;
-            float t = XMath.Sqrt(XMath.Pow(x, 2) + XMath.Pow(y, 2) + XMath.Pow(z, 2)); // now_len, here!
+            float t = (float)XMath.Sqrt(x*x + y*y + z*z); // now_len, here!
             //if (t == 0) it will crash, but we shouldn't have zero len here!
             t = len / t; // to adjust the length
             x *= t; y *= t; z *= t;
+            
         }
         internal float Len()
         {
+            //return XMath.Sqrt(x * x + y * y + z * z);
             return XMath.Sqrt(x * x + y * y + z * z);
         }
 
         internal static float Distance(fTriple a, fTriple b)
         {
-            return XMath.Sqrt(XMath.Pow(a.x - b.x, 2) + XMath.Pow(a.y - b.y, 2) + XMath.Pow(a.z - b.z, 2));
+            //return XMath.Sqrt(XMath.Pow(a.x - b.x, 2) + XMath.Pow(a.y - b.y, 2) + XMath.Pow(a.z - b.z, 2));
+            return XMath.Sqrt((a.x - b.x)*(a.x - b.x) + (a.y - b.y) * (a.y - b.y) + (a.z - b.z) * (a.z - b.z));
         }
         public static fTriple operator +(fTriple a, fTriple b)
         {
@@ -128,7 +131,7 @@ namespace Liz
         }
         public Triple ToTriple()
         {
-            return new Triple(x, y, z);
+            return new Triple((double)x, (double)y, (double)z);
         }
 
     }
@@ -371,7 +374,7 @@ namespace Liz
         private MemoryBuffer1D<float,Stride1D.Dense> gpuDamperConstant;
         private MemoryBuffer1D<float, Stride1D.Dense> gpuDeltaTime;
         // kernel functions:
-        Action<Index1D, ArrayView<fBeam>, ArrayView<fNode>> Lk_beam;
+        Action<Index1D, ArrayView<fBeam>, ArrayView<fNode>, int> Lk_beam;
         Action<Index1D, ArrayView<fNode>, ArrayView<int>> Lk_constant_force;
         Action<Index1D, ArrayView<fNode>, ArrayView<float>> Lk_damper;
         Action<Index1D, ArrayView<fNode>, ArrayView<int>> Lk_support_nodes;
@@ -656,6 +659,9 @@ namespace Liz
             BeamCount = ProtoBeams.Count;
             fNodes = new fNode[NodeCount];
             fBeams = new fBeam[BeamCount];
+
+            Nodes = new Node[NodeCount];
+            Beams = new Beam[BeamCount];
             ForcedNodesIndexes = new int[ProtoNodes.Count(item => !item.Force.IsZero)]; // count number of non, zero forces
             SupportedNodesIndexes = new int[ProtoNodes.Count(item => item.SupportType != 0)]; // like-wise, for supports
             // this is also possible with LINQ, but I prefer to keep it simple
@@ -683,7 +689,7 @@ namespace Liz
 
                 // Load all kernels
                 //Action<Index1D, ArrayView<TripleTest>> test = device.LoadAutoGroupedStreamKernel<Index1D, ArrayView<TripleTest>>(TestKernel);
-                Lk_beam = device.LoadAutoGroupedStreamKernel<Index1D, ArrayView<fBeam>, ArrayView<fNode>> (KernelBeam);
+                Lk_beam = device.LoadAutoGroupedStreamKernel<Index1D, ArrayView<fBeam>, ArrayView<fNode>,int> (KernelBeam2);
                 /*debug1*/
                 Lk_constant_force = device.LoadAutoGroupedStreamKernel<Index1D, ArrayView<fNode>, ArrayView<int>>(KernelConstantForce);
                 Lk_damper = device.LoadAutoGroupedStreamKernel<Index1D, ArrayView<fNode>, ArrayView<float>>(KernelDamper);
@@ -723,13 +729,13 @@ namespace Liz
             for(int i = 0; i < Step_count; i++)
             {
 
-                Lk_beam(BeamCount, gpuBeams.View, gpuNodes.View);
+                Lk_beam(1, gpuBeams.View, gpuNodes.View,BeamCount);
                 device.Synchronize();
-                Lk_constant_force(ForcedNodesIndexes.Length, gpuNodes.View, gpuForcedNodesIndexes.View);
+                Lk_constant_force(NodeCount, gpuNodes.View, gpuForcedNodesIndexes.View);
                 device.Synchronize();
                 Lk_damper(NodeCount,gpuNodes.View,gpuDamperConstant.View);
                 device.Synchronize();
-                Lk_support_nodes(SupportedNodesIndexes.Length, gpuNodes.View, gpuSupportedNodesIndexes.View);
+                Lk_support_nodes(NodeCount, gpuNodes.View, gpuSupportedNodesIndexes.View);
                 // next phases: sum the free force and output it
                 Lk_nodes(NodeCount, gpuNodes.View, gpuDeltaTime.View);
                 device.Synchronize();
@@ -750,6 +756,24 @@ namespace Liz
 
         // Kernels:
 
+        static void KernelBeam2(Index1D iterator, ArrayView<fBeam> beams, ArrayView<fNode> nodes, int beam_count)
+        {
+            for (int i = 0; i < beam_count; i++)
+            {
+                /*debug1*/
+                float delta_len = fTriple.Distance(nodes[beams[i].StartNode].Position, nodes[beams[i].EndNode].Position)
+                    - beams[i].InitialLength;
+                beams[i].InternalForce = -beams[i].SpringConstant * delta_len;
+                fTriple vector_force = new fTriple(
+                    nodes[beams[i].StartNode].Position,
+                    nodes[beams[i].EndNode].Position,
+                    beams[i].InternalForce
+                    );
+                nodes[beams[i].StartNode].Force -= vector_force;
+                nodes[beams[i].EndNode].Force += vector_force;/**/
+            }
+        }
+
         static void KernelBeam(Index1D i, ArrayView<fBeam> beams, ArrayView<fNode> nodes)
         {
 
@@ -768,7 +792,8 @@ namespace Liz
 
         static void KernelConstantForce(Index1D i, ArrayView<fNode> nodes, ArrayView<int> forced_nodes_indexes)
         {
-            nodes[forced_nodes_indexes[i]].Force += nodes[forced_nodes_indexes[i]].ConstantForce;
+            //nodes[forced_nodes_indexes[i]].Force += nodes[forced_nodes_indexes[i]].ConstantForce;
+            nodes[i].Force += nodes[i].ConstantForce;
         }
 
         static void KernelDamper(Index1D i, ArrayView<fNode> nodes, ArrayView<float> damper_constant)
@@ -778,8 +803,10 @@ namespace Liz
 
         static void KernelSupprotNodes(Index1D i, ArrayView<fNode> nodes, ArrayView<int> supported_nodes_indexes)
         {
-            nodes[supported_nodes_indexes[i]].UpdateReactionForce();
-            nodes[supported_nodes_indexes[i]].Force += nodes[supported_nodes_indexes[i]].ReactionForce;
+            //nodes[supported_nodes_indexes[i]].UpdateReactionForce();
+            //nodes[supported_nodes_indexes[i]].Force += nodes[supported_nodes_indexes[i]].ReactionForce;
+            nodes[i].UpdateReactionForce();
+            nodes[i].Force += nodes[i].ReactionForce;
         }
         static void KernelNodes(Index1D i, ArrayView<fNode> nodes, ArrayView<float> delta_time)
         {
