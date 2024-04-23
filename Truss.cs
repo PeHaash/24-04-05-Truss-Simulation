@@ -230,6 +230,7 @@ namespace Liz
         private MemoryBuffer1D<Beam, Stride1D.Dense> gpuBeams;
         private MemoryBuffer1D<int,  Stride1D.Dense> gpuForcedNodesIndexes;
         private MemoryBuffer1D<int,  Stride1D.Dense> gpuSupportedNodesIndexes;
+        // kernel functions:
 
         // uncompiled data: This things are on the CPU, and ready to be changed 
         public List<ProtoNode> ProtoNodes { private set; get; }
@@ -541,8 +542,41 @@ namespace Liz
         }
 
         // Kernels:
+        void KernelBeam(int i)
+        {
+            double delta_len = Triple.Distance(Nodes[Beams[i].StartNode].Position, Nodes[Beams[i].EndNode].Position)
+                - Beams[i].InitialLength;
+            Beams[i].InternalForce = -Beams[i].SpringConstant * delta_len;
+            Triple vector_force = new Triple(
+                Nodes[Beams[i].StartNode].Position,
+                Nodes[Beams[i].EndNode].Position,
+                Beams[i].InternalForce
+                );
+            Nodes[Beams[i].StartNode].Force -= vector_force; 
+            Nodes[Beams[i].EndNode].Force += vector_force;
+        }
 
+        static void KernelConstantForce(Index1D i, ArrayView<Node> nodes, ArrayView<int> forced_nodes_indexes)
+        {
+            nodes[forced_nodes_indexes[i]].Force += nodes[forced_nodes_indexes[i]].ConstantForce;
+        }
 
+        static void KernelDamper(Index1D i, ArrayView<Node> nodes, ArrayView<double> damper_constant)
+        {
+            nodes[i].Force -= nodes[i].Velocity * damper_constant[0];
+        }
+
+        static void KernelSupprotNodes(Index1D i, ArrayView<Node> nodes, ArrayView<int> supported_nodes_indexes)
+        {
+            nodes[supported_nodes_indexes[i]].UpdateReactionForce();
+            nodes[supported_nodes_indexes[i]].Force += nodes[supported_nodes_indexes[i]].ReactionForce;
+        }
+        static void KernelNodes(Index1D i, ArrayView<Node> nodes, ArrayView<double> delta_time)
+        {
+            nodes[i].Velocity += nodes[i].Force * nodes[i].OneOverMass * delta_time[0];
+            nodes[i].Position += nodes[i].Velocity * delta_time[0];
+            nodes[i].Force = new Triple(); // we are always working with the copies of structs here :/
+        }
 
         // private functions:
         private int NearestNode(Point3d p)
