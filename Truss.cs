@@ -226,11 +226,18 @@ namespace Liz
         // compiled data: this things are on the GPU!!, and then they will be copied to the compiled part
         Context context;
         Accelerator device;
-        private MemoryBuffer1D<Node, Stride1D.Dense> gpuNodes;
-        private MemoryBuffer1D<Beam, Stride1D.Dense> gpuBeams;
-        private MemoryBuffer1D<int,  Stride1D.Dense> gpuForcedNodesIndexes;
-        private MemoryBuffer1D<int,  Stride1D.Dense> gpuSupportedNodesIndexes;
+        private MemoryBuffer1D<Node,  Stride1D.Dense> gpuNodes;
+        private MemoryBuffer1D<Beam,  Stride1D.Dense> gpuBeams;
+        private MemoryBuffer1D<int,   Stride1D.Dense> gpuForcedNodesIndexes;
+        private MemoryBuffer1D<int,   Stride1D.Dense> gpuSupportedNodesIndexes;
+        private MemoryBuffer1D<double,Stride1D.Dense> gpuDamperConstant;
+        private MemoryBuffer1D<double,Stride1D.Dense> gpuDeltaTime;
         // kernel functions:
+        Action<Index1D, ArrayView<Beam>, ArrayView<Node>> Lk_beam;
+        Action<Index1D, ArrayView<Node>, ArrayView<int>> Lk_constant_force;
+        Action<Index1D, ArrayView<Node>, ArrayView<double>> Lk_damper;
+        Action<Index1D, ArrayView<Node>, ArrayView<int>> Lk_support_nodes;
+        Action<Index1D, ArrayView<Node>, ArrayView<double>> Lk_nodes;
 
         // uncompiled data: This things are on the CPU, and ready to be changed 
         public List<ProtoNode> ProtoNodes { private set; get; }
@@ -514,7 +521,16 @@ namespace Liz
                     device = context.GetCLDevice(0).CreateAccelerator(context);
                 if (DeviceType == 4)
                     device = context.GetCudaDevice(0).CreateAccelerator(context);
-                
+                gpuDamperConstant = device.Allocate1D<double>(1);
+                gpuDeltaTime = device.Allocate1D<double>(1);
+
+                // Load all kernels
+                Lk_beam = device.LoadAutoGroupedStreamKernel<Index1D, ArrayView<Beam>, ArrayView<Node>> (KernelBeam);
+                Lk_constant_force = device.LoadAutoGroupedStreamKernel<Index1D, ArrayView<Node>, ArrayView<int>>(KernelConstantForce);
+                Lk_damper = device.LoadAutoGroupedStreamKernel<Index1D, ArrayView<Node>, ArrayView<double>>(KernelDamper);
+                Lk_support_nodes = device.LoadAutoGroupedStreamKernel<Index1D, ArrayView<Node>, ArrayView<int>>(KernelSupprotNodes);
+                Lk_nodes = device.LoadAutoGroupedStreamKernel<Index1D, ArrayView<Node>, ArrayView<double>> (KernelNodes);
+
                 ContextAllocated = true;
             }
             else
@@ -524,6 +540,8 @@ namespace Liz
                 gpuBeams.Dispose();
                 gpuForcedNodesIndexes.Dispose();
                 gpuSupportedNodesIndexes.Dispose();
+                // gpuDamperConstant.Dispose();
+                // gpuDeltaTime.Dispose(); no need for this, their size is always fixed. so just copy the array again here
             }
 
             // now send stuff into the GPU!
@@ -532,6 +550,8 @@ namespace Liz
             gpuBeams = device.Allocate1D(Beams);
             gpuForcedNodesIndexes = device.Allocate1D(ForcedNodesIndexes);
             gpuSupportedNodesIndexes = device.Allocate1D(SupportedNodesIndexes);
+            gpuDamperConstant.CopyFromCPU(new double[]{DamperConstant});
+            gpuDeltaTime.CopyFromCPU(new double[] { DeltaTime });
             // end sending them
             return 0;
         }
@@ -542,18 +562,18 @@ namespace Liz
         }
 
         // Kernels:
-        void KernelBeam(int i)
+        static void KernelBeam(Index1D i, ArrayView<Beam> beams, ArrayView<Node> nodes)
         {
-            double delta_len = Triple.Distance(Nodes[Beams[i].StartNode].Position, Nodes[Beams[i].EndNode].Position)
-                - Beams[i].InitialLength;
-            Beams[i].InternalForce = -Beams[i].SpringConstant * delta_len;
+            double delta_len = Triple.Distance(nodes[beams[i].StartNode].Position, nodes[beams[i].EndNode].Position)
+                - beams[i].InitialLength;
+            beams[i].InternalForce = -beams[i].SpringConstant * delta_len;
             Triple vector_force = new Triple(
-                Nodes[Beams[i].StartNode].Position,
-                Nodes[Beams[i].EndNode].Position,
-                Beams[i].InternalForce
+                nodes[beams[i].StartNode].Position,
+                nodes[beams[i].EndNode].Position,
+                beams[i].InternalForce
                 );
-            Nodes[Beams[i].StartNode].Force -= vector_force; 
-            Nodes[Beams[i].EndNode].Force += vector_force;
+            nodes[beams[i].StartNode].Force -= vector_force; 
+            nodes[beams[i].EndNode].Force += vector_force;
         }
 
         static void KernelConstantForce(Index1D i, ArrayView<Node> nodes, ArrayView<int> forced_nodes_indexes)
@@ -634,6 +654,12 @@ namespace Liz
         {
             if(ContextAllocated)
             {
+                gpuNodes.Dispose();
+                gpuBeams.Dispose();
+                gpuForcedNodesIndexes.Dispose();
+                gpuSupportedNodesIndexes.Dispose();
+                gpuDamperConstant.Dispose();
+                gpuDeltaTime.Dispose();
                 device.Dispose();
                 context.Dispose();
             }
