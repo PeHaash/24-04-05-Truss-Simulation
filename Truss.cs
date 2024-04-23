@@ -8,6 +8,11 @@ using System.Threading.Tasks;
 using Rhino;
 using Rhino.Geometry;
 
+using ILGPU;
+using ILGPU.Algorithms;
+using ILGPU.Runtime;
+using ILGPU.IR.Types;
+
 /*using Grasshopper;
 using Grasshopper.Kernel;
 using Grasshopper.Kernel.Data;
@@ -203,32 +208,44 @@ namespace Liz
     {
         // general data:
         public double DeltaTime { set; get; } = Default.DeltaTime;
-        private int Iteration = 0;
-        public int MaxStep { set; get; } = Default.MaxStep;
+        //private int Iteration = 0;
+        //public int MaxStep { set; get; } = Default.MaxStep;
         private int NodeCount;
         private int BeamCount;
         public double DamperConstant { set; get; } = Default.DamperConstant;
-
-        // compiled data: this things are on the GPU!!
+        private bool ContextAllocated = false;
+        // compiled data: this things are changed during update!!
         public Node[] Nodes { private set; get; }
         public Beam[] Beams { private set; get; }
         private int[] ForcedNodesIndexes;
         private int[] SupportedNodesIndexes;
 
+        // compiled data: this things are on the GPU!!, and then they will be copied to the compiled part
+        Context context;
+        Accelerator device;
+
         // uncompiled data: This things are on the CPU! 
         public List<ProtoNode> ProtoNodes { private set; get; }
         public List<ProtoBeam> ProtoBeams { private set; get; }
 
+        // functions to use
+        //public functions and stuff related to GPU
+
+        internal int DeviceType { private set; get; } // 0: CPU / 1: ThreadCPU / 2: ILGPU-CPU / 3: ILGPU-OpenCL / 4: ILGPU-CUDA 
+        public Func<int, double> Update;
+        public Func<int, int> Compile;
+
         // constructors:
-        public Truss(List<Point3d> Points, double MaxBeamLen)
+        public Truss(List<Point3d> Points, double MaxBeamLen, string deviceType)
         {
             // another constructor
             BeamCount = NodeCount = 0;
 
         }
-        public Truss(List<Line> Beam_Lines, double Tolerance)
+        public Truss(List<Line> Beam_Lines, double Tolerance, string deviceType)
         {
             // classic constructor
+
             ProtoNodes = new List<ProtoNode>();
             ProtoBeams = new List<ProtoBeam>();
             BeamCount = NodeCount = 0;
@@ -268,13 +285,16 @@ namespace Liz
                     co_node[dst.FindParent(i + 1)],
                     ProtoNodes[co_node[dst.FindParent(i)]].Pos0.DistanceTo(ProtoNodes[co_node[dst.FindParent(i + 1)]].Pos0)));
             }
+            SetDeviceType(deviceType);
+            SetDeviceFunctions();
         }
         public Truss(Truss other)
         {
             // copy constructor
+
             DeltaTime = other.DeltaTime;
-            MaxStep = other.MaxStep;
-            Iteration = other.Iteration;
+            //MaxStep = other.MaxStep;
+            //Iteration = other.Iteration;
             NodeCount = other.NodeCount;
             BeamCount = other.BeamCount;
             DamperConstant = other.DamperConstant;
@@ -284,6 +304,8 @@ namespace Liz
             if (other.SupportedNodesIndexes != null) SupportedNodesIndexes = (int[])other.SupportedNodesIndexes.Clone();
             if (other.ProtoNodes != null) ProtoNodes = other.ProtoNodes.ToList();
             if (other.ProtoBeams != null) ProtoBeams = other.ProtoBeams.ToList();
+            DeviceType = other.DeviceType;
+            SetDeviceFunctions();
         }
 
         // single features should be updated from Properties
@@ -311,10 +333,10 @@ namespace Liz
         }
 
 
-        public void Compile()
+        private int CPU_Compile(int _=0)
         {
             // make code ready for gpu!
-            Iteration = 0;
+            //Iteration = 0;
             NodeCount = ProtoNodes.Count;
             BeamCount = ProtoBeams.Count;
             Nodes = new Node[NodeCount];
@@ -331,62 +353,128 @@ namespace Liz
             }
             for (int i = 0; i < BeamCount; i++) Beams[i] = ProtoBeams[i].ToBeam();
             // int[] intArray = objects.Select(obj => obj.ToInt()).ToArray(); sample in LINQ
+            return 0;
         }
 
-        public double Update()
+        private double CPU_Update(int Step_count)
         {
+
             double free_forces = 0;
-            if (Iteration == MaxStep) return 0;
             // update beams, position is input, force is output
-            for (int i = 0; i < BeamCount; i++)
+            for (int iterator = 0; iterator < Step_count; iterator++)
             {
-                double delta_len = Triple.Distance(Nodes[Beams[i].StartNode].Position, Nodes[Beams[i].EndNode].Position) 
-                    - Beams[i].InitialLength;
-                // deltaLen <0 : newLen is shorter --> compression --> InternalForce should be >0, vice versa
-                Beams[i].InternalForce = -Beams[i].SpringConstant * delta_len;
-                // vector from start to end
-                Triple vector_force = new Triple(
-                    Nodes[Beams[i].StartNode].Position,
-                    Nodes[Beams[i].EndNode].Position,
-                    Beams[i].InternalForce
-                    );
-                // comp -> int mosbat -> vector force mosbat be samte end;
-                Nodes[Beams[i].StartNode].Force -= vector_force; /// -=, and stuff like that is saving my code:implicit copying in handled
-                Nodes[Beams[i].EndNode].Force += vector_force;
+                free_forces = 0;
+                for (int i = 0; i < BeamCount; i++)
+                {
+                    double delta_len = Triple.Distance(Nodes[Beams[i].StartNode].Position, Nodes[Beams[i].EndNode].Position)
+                        - Beams[i].InitialLength;
+                    // deltaLen <0 : newLen is shorter --> compression --> InternalForce should be >0, vice versa
+                    Beams[i].InternalForce = -Beams[i].SpringConstant * delta_len;
+                    // vector from start to end
+                    Triple vector_force = new Triple(
+                        Nodes[Beams[i].StartNode].Position,
+                        Nodes[Beams[i].EndNode].Position,
+                        Beams[i].InternalForce
+                        );
+                    // comp -> int mosbat -> vector force mosbat be samte end;
+                    Nodes[Beams[i].StartNode].Force -= vector_force; /// -=, and stuff like that is saving my code:implicit copying in handled
+                    Nodes[Beams[i].EndNode].Force += vector_force;
+                }
+
+
+                // add the constant force to some nodes with force
+                for (int i = 0; i < ForcedNodesIndexes.Length; i++)
+                    Nodes[ForcedNodesIndexes[i]].Force += Nodes[ForcedNodesIndexes[i]].ConstantForce;
+
+                // enforce damper constant to all nodes
+                for (int i = 0; i < NodeCount; i++)
+                    Nodes[i].Force -= Nodes[i].Velocity * DamperConstant;
+
+                // make nodes with support 0 in force, put them in the ReactionForce (one of the main outputs!)
+                for (int i = 0; i < SupportedNodesIndexes.Length; i++)
+                {
+                    Nodes[SupportedNodesIndexes[i]].UpdateReactionForce();
+                    Nodes[SupportedNodesIndexes[i]].Force += Nodes[SupportedNodesIndexes[i]].ReactionForce;
+                }
+
+                // update nodes: with the force they receive
+                for (int i = 0; i < NodeCount; i++)
+                {
+                    free_forces += Nodes[i].Force.Len();
+                    //Acceleration[i] = Force[i] / Mass[i]; // f = m.a
+                    //Velocity[i] += Acceleration[i] * Delta; 
+                    Nodes[i].Velocity += Nodes[i].Force * Nodes[i].OneOverMass * DeltaTime;
+                    Nodes[i].Position += Nodes[i].Velocity * DeltaTime;
+                    Nodes[i].Force = new Triple(); // we are always working with the copies of structs here :/
+                }
             }
-
-            
-            // add the constant force to some nodes with force
-            for(int i = 0; i < ForcedNodesIndexes.Length; i++)
-                Nodes[ForcedNodesIndexes[i]].Force += Nodes[ForcedNodesIndexes[i]].ConstantForce;
-
-            // enforce damper constant to all nodes
-            for (int i = 0; i < NodeCount; i++)
-                Nodes[i].Force -= Nodes[i].Velocity * DamperConstant;
-
-            // make nodes with support 0 in force, put them in the ReactionForce (one of the main outputs!)
-            for (int i = 0; i < SupportedNodesIndexes.Length; i++)
-            {
-                Nodes[SupportedNodesIndexes[i]].UpdateReactionForce();
-                Nodes[SupportedNodesIndexes[i]].Force += Nodes[SupportedNodesIndexes[i]].ReactionForce;
-            }
-
-            for(int i = 0; i < NodeCount; i++)
-            {
-                free_forces += Nodes[i].Force.Len();
-                //Acceleration[i] = Force[i] / Mass[i]; // f = m.a
-                //Velocity[i] += Acceleration[i] * Delta; 
-                Nodes[i].Velocity += Nodes[i].Force * Nodes[i].OneOverMass * DeltaTime;
-                Nodes[i].Position += Nodes[i].Velocity * DeltaTime;
-                Nodes[i].Force = new Triple(); // we are always working with the copies of structs here :/
-            }
-            
-            Iteration++;
+                //Iteration++;
             return free_forces;
 
+        }
+        private double Parallel_Update(int Step_count)
+        {
+            double free_forces = 0;
+            // update beams, position is input, force is output
+            for (int iterator = 0; iterator < Step_count; iterator++)
+            {
+                free_forces = 0;
+                Parallel.For(0, BeamCount, i =>
+                {
+                    double delta_len = Triple.Distance(Nodes[Beams[i].StartNode].Position, Nodes[Beams[i].EndNode].Position)
+                        - Beams[i].InitialLength;
+                    // deltaLen <0 : newLen is shorter --> compression --> InternalForce should be >0, vice versa
+                    Beams[i].InternalForce = -Beams[i].SpringConstant * delta_len;
+                    // vector from start to end
+                    Triple vector_force = new Triple(
+                        Nodes[Beams[i].StartNode].Position,
+                        Nodes[Beams[i].EndNode].Position,
+                        Beams[i].InternalForce
+                        );
+                    // comp -> int mosbat -> vector force mosbat be samte end;
+                    Nodes[Beams[i].StartNode].Force -= vector_force; /// -=, and stuff like that is saving my code:implicit copying in handled
+                    Nodes[Beams[i].EndNode].Force += vector_force;
+                });
+
+
+                // add the constant force to some nodes with force
+                Parallel.For(0, ForcedNodesIndexes.Length, i =>
+                {
+                    Nodes[ForcedNodesIndexes[i]].Force += Nodes[ForcedNodesIndexes[i]].ConstantForce;
+                });
+
+                // enforce damper constant to all nodes
+                Parallel.For(0, NodeCount, i =>
+                {
+                    Nodes[i].Force -= Nodes[i].Velocity * DamperConstant;
+                });
+
+
+                // make nodes with support 0 in force, put them in the ReactionForce (one of the main outputs!)
+                Parallel.For(0, SupportedNodesIndexes.Length, i =>
+                {
+                    Nodes[SupportedNodesIndexes[i]].UpdateReactionForce();
+                    Nodes[SupportedNodesIndexes[i]].Force += Nodes[SupportedNodesIndexes[i]].ReactionForce;
+                });
+
+                // sum the free force, only for the last iteration!, it cannot be parallel because of race condition
+                if (iterator == Step_count -1)
+                    for (int i = 0; i < NodeCount; i++)
+                        free_forces += Nodes[i].Force.Len();
+
+                // update nodes: with the force they receive
+                Parallel.For(0, NodeCount, i =>
+                {
+                    
+                    Nodes[i].Velocity += Nodes[i].Force * Nodes[i].OneOverMass * DeltaTime;
+                    Nodes[i].Position += Nodes[i].Velocity * DeltaTime;
+                    Nodes[i].Force = new Triple(); // we are always working with the copies of structs here :/
+                });
+                
+            }
+            return free_forces;
 
         }
-            
 
         // important NOTE!!!!
         // for changing elements in an array of structs, you should do this:
@@ -405,6 +493,19 @@ namespace Liz
             item.Increment();
         */
 
+        private int ILGPU_CL_Compile(int _ = 0)
+        {
+            CPU_Compile();
+            ContextAllocated = true;
+            return 0;
+        }
+
+        private double ILGPU_Update(int Step_count)
+        {
+            return 0;
+        }
+
+
         // private functions:
         private int NearestNode(Point3d p)
         {
@@ -420,7 +521,54 @@ namespace Liz
             }
             return min_ind;
         }
+        private void SetDeviceType(string deviceType)
+        {
+            // 0: CPU / 1: ThreadCPU / 2: ILGPU-CPU / 3: ILGPU-OpenCL / 4: ILGPU-CUDA
+            switch (deviceType)
+            {
+                case "ILGPU-CUDA":
+                    DeviceType = 4; break;
+                case "ILGPU-OpenCL":
+                    DeviceType = 3; break;
+                case "ILGPU-CPU":
+                    DeviceType = 2; break;
+                case "ThreadCPU":
+                    DeviceType = 1; break;
+                default:
+                    DeviceType = 4; break;
+            }
+        }
 
+        private void SetDeviceFunctions()
+        {
+            switch(DeviceType)
+            {
+                case 3:
+                    // opencl
+                    Compile = ILGPU_CL_Compile;
+                    Update = ILGPU_Update;
+                    break;
+                case 1:
+                    Compile = CPU_Compile;
+                    Update = Parallel_Update;
+                    break;
+
+                default:
+                    Compile = CPU_Compile;
+                    Update = CPU_Update;
+                    break;
+                
+            }
+        }
+
+        ~Truss()
+        {
+            if(ContextAllocated)
+            {
+                device.Dispose();
+                context.Dispose();
+            }
+        }
 
     }
 }
