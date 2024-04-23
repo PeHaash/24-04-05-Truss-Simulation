@@ -273,6 +273,7 @@ namespace Liz
         {
             // copy constructor
             DeltaTime = other.DeltaTime;
+            MaxStep = other.MaxStep;
             Iteration = other.Iteration;
             NodeCount = other.NodeCount;
             BeamCount = other.BeamCount;
