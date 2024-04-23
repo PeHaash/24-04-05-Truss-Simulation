@@ -246,7 +246,7 @@ namespace Liz
         // functions to use
         //public functions and stuff related to GPU
 
-        internal int DeviceType { private set; get; } // 0: CPU / 1: ThreadCPU / 2: ILGPU-CPU / 3: ILGPU-OpenCL / 4: ILGPU-CUDA 
+        public int DeviceType { private set; get; } // 0: CPU / 1: ThreadCPU / 2: ILGPU-CPU / 3: ILGPU-OpenCL / 4: ILGPU-CUDA 
         public Func<int, double> Update;
         public Func<int, int> Compile;
 
