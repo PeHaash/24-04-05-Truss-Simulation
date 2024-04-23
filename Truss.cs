@@ -371,6 +371,7 @@ namespace Liz
             for (int iterator = 0; iterator < Step_count; iterator++)
             {
                 free_forces = 0;
+                // KernelBeam
                 for (int i = 0; i < BeamCount; i++)
                 {
                     double delta_len = Triple.Distance(Nodes[Beams[i].StartNode].Position, Nodes[Beams[i].EndNode].Position)
@@ -389,22 +390,22 @@ namespace Liz
                 }
 
 
-                // add the constant force to some nodes with force
+                // add the constant force to some nodes with force (KernelConstantForce)
                 for (int i = 0; i < ForcedNodesIndexes.Length; i++)
                     Nodes[ForcedNodesIndexes[i]].Force += Nodes[ForcedNodesIndexes[i]].ConstantForce;
 
-                // enforce damper constant to all nodes
+                // enforce damper constant to all nodes (KernelDamper)
                 for (int i = 0; i < NodeCount; i++)
                     Nodes[i].Force -= Nodes[i].Velocity * DamperConstant;
 
-                // make nodes with support 0 in force, put them in the ReactionForce (one of the main outputs!)
+                // make nodes with support 0 in force, put them in the ReactionForce (one of the main outputs!)(KernelSupprotNodes)
                 for (int i = 0; i < SupportedNodesIndexes.Length; i++)
                 {
                     Nodes[SupportedNodesIndexes[i]].UpdateReactionForce();
                     Nodes[SupportedNodesIndexes[i]].Force += Nodes[SupportedNodesIndexes[i]].ReactionForce;
                 }
 
-                // update nodes: with the force they receive
+                // update nodes: with the force they receive <freeforcecalculation + (KernelNodes)>
                 for (int i = 0; i < NodeCount; i++)
                 {
                     free_forces += Nodes[i].Force.Len();
