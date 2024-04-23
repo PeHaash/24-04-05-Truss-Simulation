@@ -540,6 +540,9 @@ namespace Liz
             return 0;
         }
 
+        // Kernels:
+
+
 
         // private functions:
         private int NearestNode(Point3d p)
