@@ -15,6 +15,7 @@ using ILGPU.IR.Types;
 using ILGPU.Runtime.OpenCL;
 using ILGPU.Runtime.Cuda;
 using ILGPU.Runtime.CPU;
+using System.Security.Cryptography;
 
 /*using Grasshopper;
 using Grasshopper.Kernel;
@@ -78,6 +79,133 @@ namespace Liz
         }
 
     }
+    public struct fTriple
+    {
+        public float x, y, z;
+        public fTriple(float x, float y, float z)
+        {
+            this.x = x;
+            this.y = y;
+            this.z = z;
+        }
+        internal fTriple(Point3d p)
+        {
+            x = (float)p.X; y = (float)p.Y; z = (float)p.Z;
+        }
+        internal fTriple(Vector3d v)
+        {
+            x = (float)v.X; y = (float)v.Y; z = (float)v.Z;
+        }
+        internal fTriple(fTriple start, fTriple end, float len)
+        {
+            // make a vector, from start to end with a set len
+            x = end.x - start.x; y = end.y - start.y; z = end.z - start.z;
+            float t = XMath.Sqrt(XMath.Pow(x, 2) + XMath.Pow(y, 2) + XMath.Pow(z, 2)); // now_len, here!
+            //if (t == 0) it will crash, but we shouldn't have zero len here!
+            t = len / t; // to adjust the length
+            x *= t; y *= t; z *= t;
+        }
+        internal float Len()
+        {
+            return XMath.Sqrt(x * x + y * y + z * z);
+        }
+
+        internal static float Distance(fTriple a, fTriple b)
+        {
+            return XMath.Sqrt(XMath.Pow(a.x - b.x, 2) + XMath.Pow(a.y - b.y, 2) + XMath.Pow(a.z - b.z, 2));
+        }
+        public static fTriple operator +(fTriple a, fTriple b)
+        {
+            return new fTriple(a.x + b.x, a.y + b.y, a.z + b.z);
+        }
+        public static fTriple operator -(fTriple a, fTriple b)
+        {
+            return new fTriple(a.x - b.x, a.y - b.y, a.z - b.z);
+        }
+        public static fTriple operator *(fTriple a, float b)
+        {
+            return new fTriple(a.x * b, a.y * b, a.z * b);
+        }
+        public Triple ToTriple()
+        {
+            return new Triple(x, y, z);
+        }
+
+    }
+
+    public struct fNode
+    {
+        public fTriple Pos0 { internal set; get; }
+        public fTriple Position { internal set; get; }
+        public fTriple Velocity { internal set; get; }
+        public float OneOverMass { internal set; get; }
+        public fTriple ConstantForce { internal set; get; } // only on some nodes!
+        public fTriple Force { internal set; get; }
+        public int SupportType { internal set; get; }
+        public fTriple ReactionForce { internal set; get; } // only on some nodes!
+        internal fNode(Point3d p0, Vector3d force, float mass, int support_type)
+        {
+            Pos0 = new fTriple(p0);
+            Position = new fTriple(p0);
+            Velocity = new fTriple();
+            OneOverMass = 1 / mass;
+            ConstantForce = new fTriple(force);
+            Force = new fTriple();
+            SupportType = support_type;
+            ReactionForce = new fTriple();
+        }
+        internal void UpdateReactionForce()
+        {
+            fTriple nReactionForce = new fTriple(
+                ((SupportType & 4) != 0) ? -Force.x : 0,
+                ((SupportType & 2) != 0) ? -Force.y : 0,
+                ((SupportType & 1) != 0) ? -Force.z : 0
+                );
+            ReactionForce = nReactionForce;
+            //Force += ReactionForce; kinda side-effect, cleaned it
+        }
+        internal Node ToNode()
+        {
+            Node ret = new Node();
+            ret.Position = Position.ToTriple();
+            ret.Pos0 = Pos0.ToTriple();
+            ret.Velocity = Velocity.ToTriple();
+            ret.OneOverMass = OneOverMass;
+            ret.ConstantForce = ConstantForce.ToTriple();
+            ret.Force = Force.ToTriple();
+            ret.SupportType = SupportType;
+            ret.ReactionForce = ReactionForce.ToTriple();
+            return ret;
+        }
+    }
+
+    public struct fBeam
+    {
+        public int StartNode { internal set; get; }
+        public int EndNode { internal set; get; }
+        public float InitialLength { internal set; get; }
+        public float SpringConstant { internal set; get; }
+        public float InternalForce { internal set; get; } // +: compression beam: push nodes, -: tension beam: pull nodes
+        internal fBeam(int startnode, int endnode, float initlen, float sprconst)
+        {
+            StartNode = startnode;
+            EndNode = endnode;
+            InitialLength = initlen;
+            SpringConstant = sprconst;
+            InternalForce = 0;
+        }
+        internal Beam ToBeam()
+        {
+            Beam ret = new Beam();
+            ret.StartNode = StartNode;
+            ret.EndNode = EndNode;
+            ret.InitialLength = InitialLength;
+            ret.SpringConstant = SpringConstant;
+            ret.InternalForce = InternalForce;
+            return ret;
+        }
+    }
+
     public struct Triple
     {
         public double x, y, z;
@@ -190,6 +318,10 @@ namespace Liz
         {
             return new Node(Pos0, Force, Mass, SupportType);
         }
+        internal fNode TofNode()
+        {
+            return new fNode(Pos0, Force, (float)Mass, SupportType); ;
+        }
     }
     public struct ProtoBeam
     {
@@ -206,6 +338,10 @@ namespace Liz
         {
             return new Beam(Link.Item1, Link.Item2, Length, Stiffness);
         }
+        internal fBeam TofBeam()
+        {
+            return new fBeam(Link.Item1, Link.Item2, (float)Length, (float)Stiffness);
+        }
     }
     public class Truss
     {
@@ -220,24 +356,26 @@ namespace Liz
         // compiled data: this things are changed during update!!
         public Node[] Nodes { private set; get; }
         public Beam[] Beams { private set; get; }
+        public fNode[] fNodes { private set; get; }
+        public fBeam[] fBeams { private set; get; }
         private int[] ForcedNodesIndexes;
         private int[] SupportedNodesIndexes;
 
         // compiled data: this things are on the GPU!!, and then they will be copied to the compiled part
         Context context;
         Accelerator device;
-        private MemoryBuffer1D<Node,  Stride1D.Dense> gpuNodes;
-        private MemoryBuffer1D<Beam,  Stride1D.Dense> gpuBeams;
+        private MemoryBuffer1D<fNode,  Stride1D.Dense> gpuNodes;
+        private MemoryBuffer1D<fBeam,  Stride1D.Dense> gpuBeams;
         private MemoryBuffer1D<int,   Stride1D.Dense> gpuForcedNodesIndexes;
         private MemoryBuffer1D<int,   Stride1D.Dense> gpuSupportedNodesIndexes;
-        private MemoryBuffer1D<double,Stride1D.Dense> gpuDamperConstant;
-        private MemoryBuffer1D<double,Stride1D.Dense> gpuDeltaTime;
+        private MemoryBuffer1D<float,Stride1D.Dense> gpuDamperConstant;
+        private MemoryBuffer1D<float, Stride1D.Dense> gpuDeltaTime;
         // kernel functions:
-        Action<Index1D, ArrayView<Beam>, ArrayView<Node>> Lk_beam;
-        Action<Index1D, ArrayView<Node>, ArrayView<int>> Lk_constant_force;
-        Action<Index1D, ArrayView<Node>, ArrayView<double>> Lk_damper;
-        Action<Index1D, ArrayView<Node>, ArrayView<int>> Lk_support_nodes;
-        Action<Index1D, ArrayView<Node>, ArrayView<double>> Lk_nodes;
+        Action<Index1D, ArrayView<fBeam>, ArrayView<fNode>> Lk_beam;
+        Action<Index1D, ArrayView<fNode>, ArrayView<int>> Lk_constant_force;
+        Action<Index1D, ArrayView<fNode>, ArrayView<float>> Lk_damper;
+        Action<Index1D, ArrayView<fNode>, ArrayView<int>> Lk_support_nodes;
+        Action<Index1D, ArrayView<fNode>, ArrayView<float>> Lk_nodes;
 
         // uncompiled data: This things are on the CPU, and ready to be changed 
         public List<ProtoNode> ProtoNodes { private set; get; }
@@ -356,6 +494,8 @@ namespace Liz
             BeamCount = ProtoBeams.Count;
             Nodes = new Node[NodeCount];
             Beams = new Beam[BeamCount];
+            fNodes = new fNode[NodeCount];
+            fBeams = new fBeam[BeamCount];
             ForcedNodesIndexes = new int[ProtoNodes.Count(item => !item.Force.IsZero)]; // count number of non, zero forces
             SupportedNodesIndexes = new int[ProtoNodes.Count(item => item.SupportType != 0)]; // like-wise, for supports
             // this is also possible with LINQ, but I prefer to keep it simple
@@ -511,9 +651,26 @@ namespace Liz
 
         private int ILGPU_Compile(int _ = 0)
         {
-            CPU_Compile();
+            /**/
+            NodeCount = ProtoNodes.Count;
+            BeamCount = ProtoBeams.Count;
+            fNodes = new fNode[NodeCount];
+            fBeams = new fBeam[BeamCount];
+            ForcedNodesIndexes = new int[ProtoNodes.Count(item => !item.Force.IsZero)]; // count number of non, zero forces
+            SupportedNodesIndexes = new int[ProtoNodes.Count(item => item.SupportType != 0)]; // like-wise, for supports
+            // this is also possible with LINQ, but I prefer to keep it simple
+            int fn_po = 0, sn_po = 0;
+            for (int i = 0; i < NodeCount; i++)
+            {
+                fNodes[i] = ProtoNodes[i].TofNode();
+                if (!ProtoNodes[i].Force.IsZero) ForcedNodesIndexes[fn_po++] = i;
+                if (ProtoNodes[i].SupportType != 0) SupportedNodesIndexes[sn_po++] = i;
+            }
+            for (int i = 0; i < BeamCount; i++) fBeams[i] = ProtoBeams[i].TofBeam();
+            /**/
             if (!ContextAllocated)
             {
+                
                 context = Context.Create(builder => builder.Default().EnableAlgorithms());
                 if(DeviceType == 2)
                     device = context.GetCPUDevice(0).CreateAccelerator(context);
@@ -521,17 +678,20 @@ namespace Liz
                     device = context.GetCLDevice(0).CreateAccelerator(context);
                 if (DeviceType == 4)
                     device = context.GetCudaDevice(0).CreateAccelerator(context);
-                gpuDamperConstant = device.Allocate1D<double>(1);
-                gpuDeltaTime = device.Allocate1D<double>(1);
+                gpuDamperConstant = device.Allocate1D<float>(1);
+                gpuDeltaTime = device.Allocate1D<float>(1);
 
                 // Load all kernels
-                Lk_beam = device.LoadAutoGroupedStreamKernel<Index1D, ArrayView<Beam>, ArrayView<Node>> (KernelBeam);
-                Lk_constant_force = device.LoadAutoGroupedStreamKernel<Index1D, ArrayView<Node>, ArrayView<int>>(KernelConstantForce);
-                Lk_damper = device.LoadAutoGroupedStreamKernel<Index1D, ArrayView<Node>, ArrayView<double>>(KernelDamper);
-                Lk_support_nodes = device.LoadAutoGroupedStreamKernel<Index1D, ArrayView<Node>, ArrayView<int>>(KernelSupprotNodes);
-                Lk_nodes = device.LoadAutoGroupedStreamKernel<Index1D, ArrayView<Node>, ArrayView<double>> (KernelNodes);
+                //Action<Index1D, ArrayView<TripleTest>> test = device.LoadAutoGroupedStreamKernel<Index1D, ArrayView<TripleTest>>(TestKernel);
+                Lk_beam = device.LoadAutoGroupedStreamKernel<Index1D, ArrayView<fBeam>, ArrayView<fNode>> (KernelBeam);
+                /*debug1*/
+                Lk_constant_force = device.LoadAutoGroupedStreamKernel<Index1D, ArrayView<fNode>, ArrayView<int>>(KernelConstantForce);
+                Lk_damper = device.LoadAutoGroupedStreamKernel<Index1D, ArrayView<fNode>, ArrayView<float>>(KernelDamper);
+                Lk_support_nodes = device.LoadAutoGroupedStreamKernel<Index1D, ArrayView<fNode>, ArrayView<int>>(KernelSupprotNodes);
+                Lk_nodes = device.LoadAutoGroupedStreamKernel<Index1D, ArrayView<fNode>, ArrayView<float>> (KernelNodes);
 
                 ContextAllocated = true;
+                /**/
             }
             else
             {
@@ -546,12 +706,14 @@ namespace Liz
 
             // now send stuff into the GPU!
             // we keep these here, because it may 
-            gpuNodes = device.Allocate1D(Nodes);
-            gpuBeams = device.Allocate1D(Beams);
+            /* debug1*/
+            gpuNodes = device.Allocate1D(fNodes);
+            gpuBeams = device.Allocate1D(fBeams);
             gpuForcedNodesIndexes = device.Allocate1D(ForcedNodesIndexes);
             gpuSupportedNodesIndexes = device.Allocate1D(SupportedNodesIndexes);
-            gpuDamperConstant.CopyFromCPU(new double[]{DamperConstant});
-            gpuDeltaTime.CopyFromCPU(new double[] { DeltaTime });
+            gpuDamperConstant.CopyFromCPU(new float[]{(float)DamperConstant});
+            gpuDeltaTime.CopyFromCPU(new float[] { (float)DeltaTime });
+            /**/
             // end sending them
             return 0;
         }
@@ -573,46 +735,57 @@ namespace Liz
                 device.Synchronize();
             }
             // send it back to the CPU memory
-            gpuBeams.CopyToCPU(Beams);
-            gpuNodes.CopyToCPU(Nodes);
+            gpuBeams.CopyToCPU(fBeams);
+            gpuNodes.CopyToCPU(fNodes);
+            for(int i = 0; i < BeamCount; i++)
+            {
+                Beams[i] = fBeams[i].ToBeam();
+            }
+            for(int i = 0;i < NodeCount; i++)
+            {
+                Nodes[i] = fNodes[i].ToNode();
+            }
             return -1;
         }
 
         // Kernels:
-        static void KernelBeam(Index1D i, ArrayView<Beam> beams, ArrayView<Node> nodes)
+
+        static void KernelBeam(Index1D i, ArrayView<fBeam> beams, ArrayView<fNode> nodes)
         {
-            double delta_len = Triple.Distance(nodes[beams[i].StartNode].Position, nodes[beams[i].EndNode].Position)
+
+            /*debug1*/
+            float delta_len = fTriple.Distance(nodes[beams[i].StartNode].Position, nodes[beams[i].EndNode].Position)
                 - beams[i].InitialLength;
             beams[i].InternalForce = -beams[i].SpringConstant * delta_len;
-            Triple vector_force = new Triple(
+            fTriple vector_force = new fTriple(
                 nodes[beams[i].StartNode].Position,
                 nodes[beams[i].EndNode].Position,
                 beams[i].InternalForce
                 );
             nodes[beams[i].StartNode].Force -= vector_force; 
-            nodes[beams[i].EndNode].Force += vector_force;
+            nodes[beams[i].EndNode].Force += vector_force;/**/
         }
 
-        static void KernelConstantForce(Index1D i, ArrayView<Node> nodes, ArrayView<int> forced_nodes_indexes)
+        static void KernelConstantForce(Index1D i, ArrayView<fNode> nodes, ArrayView<int> forced_nodes_indexes)
         {
             nodes[forced_nodes_indexes[i]].Force += nodes[forced_nodes_indexes[i]].ConstantForce;
         }
 
-        static void KernelDamper(Index1D i, ArrayView<Node> nodes, ArrayView<double> damper_constant)
+        static void KernelDamper(Index1D i, ArrayView<fNode> nodes, ArrayView<float> damper_constant)
         {
             nodes[i].Force -= nodes[i].Velocity * damper_constant[0];
         }
 
-        static void KernelSupprotNodes(Index1D i, ArrayView<Node> nodes, ArrayView<int> supported_nodes_indexes)
+        static void KernelSupprotNodes(Index1D i, ArrayView<fNode> nodes, ArrayView<int> supported_nodes_indexes)
         {
             nodes[supported_nodes_indexes[i]].UpdateReactionForce();
             nodes[supported_nodes_indexes[i]].Force += nodes[supported_nodes_indexes[i]].ReactionForce;
         }
-        static void KernelNodes(Index1D i, ArrayView<Node> nodes, ArrayView<double> delta_time)
+        static void KernelNodes(Index1D i, ArrayView<fNode> nodes, ArrayView<float> delta_time)
         {
             nodes[i].Velocity += nodes[i].Force * nodes[i].OneOverMass * delta_time[0];
             nodes[i].Position += nodes[i].Velocity * delta_time[0];
-            nodes[i].Force = new Triple(); // we are always working with the copies of structs here :/
+            nodes[i].Force = new fTriple(); // we are always working with the copies of structs here :/
         }
 
         // private functions:
