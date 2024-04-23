@@ -99,19 +99,19 @@ namespace Liz
         {
             // make a vector, from start to end with a set len
             x = end.x - start.x; y = end.y - start.y; z = end.z - start.z;
-            double t = Math.Sqrt(Math.Pow(x, 2) + Math.Pow(y, 2) + Math.Pow(z, 2)); // now_len, here!
+            double t = XMath.Sqrt(XMath.Pow(x, 2) + XMath.Pow(y, 2) + XMath.Pow(z, 2)); // now_len, here!
             //if (t == 0) it will crash, but we shouldn't have zero len here!
             t = len / t; // to adjust the length
             x *= t; y *= t; z *= t;
         }
         internal double Len()
         {
-            return Math.Sqrt(x*x + y*y + z*z);
+            return XMath.Sqrt(x*x + y*y + z*z);
         }
 
         internal static double Distance(Triple a, Triple b)
         {
-            return Math.Sqrt(Math.Pow(a.x - b.x, 2) + Math.Pow(a.y - b.y, 2) + Math.Pow(a.z - b.z, 2));
+            return XMath.Sqrt(XMath.Pow(a.x - b.x, 2) + XMath.Pow(a.y - b.y, 2) + XMath.Pow(a.z - b.z, 2));
         }
         public static Triple operator +(Triple a, Triple b)
         {
@@ -558,7 +558,24 @@ namespace Liz
 
         private double ILGPU_Update(int Step_count)
         {
-            return 0;
+            for(int i = 0; i < Step_count; i++)
+            {
+
+                Lk_beam(BeamCount, gpuBeams.View, gpuNodes.View);
+                device.Synchronize();
+                Lk_constant_force(ForcedNodesIndexes.Length, gpuNodes.View, gpuForcedNodesIndexes.View);
+                device.Synchronize();
+                Lk_damper(NodeCount,gpuNodes.View,gpuDamperConstant.View);
+                device.Synchronize();
+                Lk_support_nodes(SupportedNodesIndexes.Length, gpuNodes.View, gpuSupportedNodesIndexes.View);
+                // next phases: sum the free force and output it
+                Lk_nodes(NodeCount, gpuNodes.View, gpuDeltaTime.View);
+                device.Synchronize();
+            }
+            // send it back to the CPU memory
+            gpuBeams.CopyToCPU(Beams);
+            gpuNodes.CopyToCPU(Nodes);
+            return -1;
         }
 
         // Kernels:
