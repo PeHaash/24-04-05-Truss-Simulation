@@ -1545,8 +1545,47 @@ namespace Liz
             SupportedNodesIndexes = device.Allocate1D(tempSupportedNodesIndexes);
             // end sending them, then will receive them in the Receive function!
         }
-        public double Update(int Step_count) { return 0; }
-        public void Receive(ref Point3d[] points_positions, ref Vector3d[] reaction_forces, ref Tuple<int, int, double>[] beam_forces) { }
+        public double Update(int Step_count) {
+            for (int i = 0; i < Step_count; i++)
+            {
+                Lk_UpdateBeam(BeamCount, Beams.View, Nodes.View, ForceOutputsFromBeams.View);
+                device.Synchronize();
+                Lk_UpdateNodeForcesAndDamper(NodeCount, Nodes.View, ForceOutputsFromBeams.View, DamperConstant);
+                device.Synchronize();
+                Lk_UpdateSupportNodes(NodeCount, Nodes.View, SupportedNodesIndexes.View);
+                device.Synchronize();
+                // next phases: sum the free force and output it
+                Lk_UpdateNodes(NodeCount, Nodes.View, DeltaTime);
+                device.Synchronize();
+            }
+            return -1;
+        }
+        public void Receive(ref Point3d[] points_positions, ref Vector3d[] reaction_forces, ref Tuple<int, int, double>[] beam_forces)
+        {
+            // init
+            if (points_positions == null || points_positions.Length != NodeCount)
+                points_positions = new Point3d[NodeCount];
+            if (reaction_forces == null || reaction_forces.Length != NodeCount)
+                reaction_forces = new Vector3d[NodeCount];
+            if (beam_forces == null || beam_forces.Length != BeamCount)
+                beam_forces = new Tuple<int, int, double>[BeamCount];
+
+            Node[] tempNodes = new Node[NodeCount];
+            Beam[] tempBeams = new Beam[NodeCount];
+
+            // send it back to the CPU memory
+            Beams.CopyToCPU(tempBeams);
+            Nodes.CopyToCPU(tempNodes);
+
+            for (int i = 0; i < NodeCount; i++)
+            {
+                points_positions[i] = new Point3d(tempNodes[i].Pos0.x, tempNodes[i].Pos0.y, tempNodes[i].Pos0.z);
+                reaction_forces[i] = new Vector3d(tempNodes[i].ReactionForce.x, tempNodes[i].ReactionForce.y, tempNodes[i].ReactionForce.z);
+            }
+            for (int i = 0; i < BeamCount; i++)
+                beam_forces[i] = new Tuple<int, int, double>(tempBeams[i].StartNode, tempBeams[i].EndNode, tempBeams[i].InternalForce);
+
+        }
 
         // Kernels are here!
         static void UpdateBeam(Index1D i, ArrayView<Beam> beams, ArrayView<Node> nodes, ArrayView<Triple> fofb)
@@ -1576,14 +1615,11 @@ namespace Liz
             nodes[supported_nodes_indexes[i]].UpdateReactionForce();
             nodes[supported_nodes_indexes[i]].Force += nodes[supported_nodes_indexes[i]].ReactionForce;
         }
-
         static void UpdateNodes(Index1D i, ArrayView<Node> nodes, float delta_time)
         {
             nodes[i].Velocity += nodes[i].Force * nodes[i].OneOverMass * delta_time;
             nodes[i].Position += nodes[i].Velocity * delta_time;
         }
-
-
 
         ~ILGPU_Simulator()
         {
