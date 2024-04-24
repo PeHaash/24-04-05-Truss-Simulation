@@ -1435,14 +1435,14 @@ namespace Liz
         Accelerator device;
         private MemoryBuffer1D<Node, Stride1D.Dense> Nodes;
         private MemoryBuffer1D<Beam, Stride1D.Dense> Beams;
-        private MemoryBuffer1D<float, Stride1D.Dense> ForceOutputsFromBeams; //fofb
+        private MemoryBuffer1D<Triple, Stride1D.Dense> ForceOutputsFromBeams; //fofb
         //private MemoryBuffer1D<int, Stride1D.Dense> ForcedNodesIndexes;
         private MemoryBuffer1D<int, Stride1D.Dense> SupportedNodesIndexes;
         //private MemoryBuffer1D<float, Stride1D.Dense> gpuDamperConstant;
         //private MemoryBuffer1D<float, Stride1D.Dense> gpuDeltaTime;
         // kernel functions:
-        Action<Index1D, ArrayView<Beam>, Aralksajfsalkfjs;lf ArrayView<float>> Lk_UpdateBeam;
-        Action<Index1D, ArrayView<Node>, ArrayView<float>, float> Lk_UpdateNodeForcesAndDamper;
+        Action<Index1D, ArrayView<Beam>, ArrayView<Node>, ArrayView<Triple>> Lk_UpdateBeam;
+        Action<Index1D, ArrayView<Node>, ArrayView<Triple>, float> Lk_UpdateNodeForcesAndDamper;
         //Action<Index1D, ArrayView<fNode>, ArrayView<float>> Lk_damper;
         Action<Index1D, ArrayView<Node>, ArrayView<int>> Lk_UpdateSupportNodes;
         Action<Index1D, ArrayView<Node>, float> Lk_UpdateNodes;
@@ -1456,13 +1456,13 @@ namespace Liz
         //public functions and stuff related to GPU
         public int Type { set; get; }
         public void Send(List<ProtoNode> ProtoNodes, List<ProtoBeam> ProtoBeams) {
-            /**/
             NodeCount = ProtoNodes.Count;
             BeamCount = ProtoBeams.Count;
             Node[] tempNodes = new Node[NodeCount];
             Beam[] tempBeams = new Beam[BeamCount];
-            float[] tempFofb = new float[BeamCount * 2]; // later we just copy it, we want it to be all zero
+            Triple[] tempFofb = new Triple[BeamCount * 2]; // later we just copy it, we want it to be all zero
             int[] tempSupportedNodesIndexes = new int[ProtoNodes.Count(item => item.SupportType != 0)];
+            // make support node indexes
             int sn_po = 0;
             for (int i = 0; i < NodeCount; i++)
             {
@@ -1471,7 +1471,7 @@ namespace Liz
             }
             for (int i = 0; i < BeamCount; i++) tempBeams[i] = new Beam(ProtoBeams[i]);
 
-            // make the FoFb ok! & other things
+            // make the FoFb ok & other things
             List<List<Tuple<int, int>>> graph = new List<List<Tuple<int,int>>>(NodeCount);
             for(int  i = 0; i < NodeCount; i++)
             {
@@ -1509,10 +1509,9 @@ namespace Liz
             }
 
 
-            /**/
+            // make the context
             if (!ContextAllocated)
             {
-
                 context = Context.Create(builder => builder.Default().EnableAlgorithms().Math(MathMode.Fast32BitOnly));
                 if (Type == 2)
                     device = context.GetCPUDevice(0).CreateAccelerator(context);
@@ -1521,18 +1520,13 @@ namespace Liz
                 if (Type == 4)
                     device = context.GetCudaDevice(0).CreateAccelerator(context);
                 // Load all kernels
-                Lk_UpdateBeam;
-                Lk_UpdateNodeForcesAndDamper;
-                Lk_UpdateSupportNodes;
-                Lk_UpdateNodes;
-
-                Lk_beam = device.LoadAutoGroupedStreamKernel<Index1D, ArrayView<Beam>, ArrayView<Node>, int>(KernelBeam2);
-                /*debug1*/
-                Lk_constant_force = device.LoadAutoGroupedStreamKernel<Index1D, ArrayView<fNode>, ArrayView<int>>(KernelConstantForce);
-                Lk_damper = device.LoadAutoGroupedStreamKernel<Index1D, ArrayView<Node>, ArrayView<float>>(KernelDamper);
-                Lk_support_nodes = device.LoadAutoGroupedStreamKernel<Index1D, ArrayView<Node>, ArrayView<int>>(KernelSupprotNodes);
-                Lk_nodes = device.LoadAutoGroupedStreamKernel<Index1D, ArrayView<Node>, ArrayView<float>>(KernelNodes);
-
+                Lk_UpdateBeam = device.LoadAutoGroupedStreamKernel<Index1D, ArrayView<Beam>, ArrayView<Node>, ArrayView<Triple>>
+                    (UpdateBeam);
+                Lk_UpdateNodeForcesAndDamper = device.LoadAutoGroupedStreamKernel<Index1D, ArrayView<Node>, ArrayView<Triple>, float>
+                    (UpdateNodesForcesAndDamper);
+                Lk_UpdateSupportNodes = device.LoadAutoGroupedStreamKernel<Index1D, ArrayView<Node>, ArrayView<int>>
+                    (UpdateSupportNodes);
+                Lk_UpdateNodes = device.LoadAutoGroupedStreamKernel<Index1D, ArrayView<Node>, float> (UpdateNodes);
                 ContextAllocated = true;
                 /**/
             }
@@ -1557,7 +1551,6 @@ namespace Liz
         // Kernels are here!
         static void UpdateBeam(Index1D i, ArrayView<Beam> beams, ArrayView<Node> nodes, ArrayView<Triple> fofb)
         {
-            /*debug1*/
             float delta_len = Triple.Distance(nodes[beams[i].StartNode].Position, nodes[beams[i].EndNode].Position)
                 - beams[i].InitialLength;
             beams[i].InternalForce = -beams[i].SpringConstant * delta_len;
@@ -1568,67 +1561,28 @@ namespace Liz
                 );
             fofb[beams[i].StartNodePointer] = -vector_force;
             fofb[beams[i].EndNodePointer] = vector_force;
-            //nodes[beams[i].StartNode].Force -= vector_force;
-            //nodes[beams[i].EndNode].Force += vector_force;/**/
-        }
-        static void KernelBeam2(Index1D iterator, ArrayView<fBeam> beams, ArrayView<fNode> nodes, int beam_count)
-        {
-            for (int i = 0; i < beam_count; i++)
-            {
-                /*debug1*/
-                float delta_len = fTriple.Distance(nodes[beams[i].StartNode].Position, nodes[beams[i].EndNode].Position)
-                    - beams[i].InitialLength;
-                beams[i].InternalForce = -beams[i].SpringConstant * delta_len;
-                fTriple vector_force = new fTriple(
-                    nodes[beams[i].StartNode].Position,
-                    nodes[beams[i].EndNode].Position,
-                    beams[i].InternalForce
-                    );
-                nodes[beams[i].StartNode].Force -= vector_force;
-                nodes[beams[i].EndNode].Force += vector_force;/**/
-            }
         }
 
-        static void KernelBeam(Index1D i, ArrayView<fBeam> beams, ArrayView<fNode> nodes)
+        static void UpdateNodesForcesAndDamper(Index1D i, ArrayView<Node> nodes, ArrayView<Triple> fofb, float damper)
         {
-
-            /*debug1*/
-            float delta_len = fTriple.Distance(nodes[beams[i].StartNode].Position, nodes[beams[i].EndNode].Position)
-                - beams[i].InitialLength;
-            beams[i].InternalForce = -beams[i].SpringConstant * delta_len;
-            fTriple vector_force = new fTriple(
-                nodes[beams[i].StartNode].Position,
-                nodes[beams[i].EndNode].Position,
-                beams[i].InternalForce
-                );
-            nodes[beams[i].StartNode].Force -= vector_force;
-            nodes[beams[i].EndNode].Force += vector_force;/**/
+            nodes[i].Force = nodes[i].ConstantForce;
+            for (int j = nodes[i].StartRange; j < nodes[i].EndRange; j++)
+                nodes[i].Force += fofb[j];
+            nodes[i].Force -= nodes[i].Velocity * damper;
         }
 
-        static void KernelConstantForce(Index1D i, ArrayView<fNode> nodes, ArrayView<int> forced_nodes_indexes)
+        static void UpdateSupportNodes(Index1D i, ArrayView<Node> nodes, ArrayView<int> supported_nodes_indexes)
         {
-            //nodes[forced_nodes_indexes[i]].Force += nodes[forced_nodes_indexes[i]].ConstantForce;
-            nodes[i].Force += nodes[i].ConstantForce;
+            nodes[supported_nodes_indexes[i]].UpdateReactionForce();
+            nodes[supported_nodes_indexes[i]].Force += nodes[supported_nodes_indexes[i]].ReactionForce;
         }
 
-        static void KernelDamper(Index1D i, ArrayView<fNode> nodes, ArrayView<float> damper_constant)
+        static void UpdateNodes(Index1D i, ArrayView<Node> nodes, float delta_time)
         {
-            nodes[i].Force -= nodes[i].Velocity * damper_constant[0];
+            nodes[i].Velocity += nodes[i].Force * nodes[i].OneOverMass * delta_time;
+            nodes[i].Position += nodes[i].Velocity * delta_time;
         }
 
-        static void KernelSupprotNodes(Index1D i, ArrayView<fNode> nodes, ArrayView<int> supported_nodes_indexes)
-        {
-            //nodes[supported_nodes_indexes[i]].UpdateReactionForce();
-            //nodes[supported_nodes_indexes[i]].Force += nodes[supported_nodes_indexes[i]].ReactionForce;
-            nodes[i].UpdateReactionForce();
-            nodes[i].Force += nodes[i].ReactionForce;
-        }
-        static void KernelNodes(Index1D i, ArrayView<fNode> nodes, ArrayView<float> delta_time)
-        {
-            nodes[i].Velocity += nodes[i].Force * nodes[i].OneOverMass * delta_time[0];
-            nodes[i].Position += nodes[i].Velocity * delta_time[0];
-            nodes[i].Force = new fTriple(); // we are always working with the copies of structs here :/
-        }
 
 
         ~ILGPU_Simulator()
