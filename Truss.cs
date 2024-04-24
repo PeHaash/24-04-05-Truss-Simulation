@@ -951,9 +951,9 @@ namespace Liz
         public List<ProtoBeam> ProtoBeams { private set; get; }
 
         // these data are the outputs of our truss
-        public Point3d[] oNodes { private set; get; }
-        public Vector3d[] oReactionForces { private set; get; }  
-        public Tuple<int, int, double>[] oBeamForces { private set; get; }
+        public Point3d[] oNodes;
+        public Vector3d[] oReactionForces;  
+        public Tuple<int, int, double>[] oBeamForces;
         // details of the simulator we are using
         internal int SimulatorType { private set; get; } // 0: CPU / 1: ThreadCPU / 2: ILGPU-CPU / 3: ILGPU-OpenCL / 4: ILGPU-CUDA 
         ISimulator Simulator;
@@ -1024,6 +1024,19 @@ namespace Liz
             // simulator
             SimulatorType = other.SimulatorType;
             SetSimulatorType("", SimulatorType);
+        }
+
+        public void Compile()
+        {
+            Simulator.Send(ProtoNodes, ProtoBeams);
+        }
+        public double Update(int Step_Count)
+        {
+            return Simulator.Update(Step_Count);
+        }
+        public void Receive()
+        {
+            Simulator.Receive(ref oNodes, ref oReactionForces, ref oBeamForces);
         }
 
         // single features should be updated from Properties
@@ -1129,6 +1142,20 @@ namespace Liz
         public double Update(int Step_count) { return Updatetype(Step_count); }
         public void Receive(ref Point3d[] points_positions, ref Vector3d[] reaction_forces, ref Tuple<int, int, double>[] beam_forces)
         {
+            if(points_positions==null || points_positions.Length!= NodeCount)
+                points_positions = new Point3d[NodeCount];
+            if(reaction_forces==null || reaction_forces.Length!= NodeCount)
+                reaction_forces = new Vector3d[NodeCount];
+            if (beam_forces == null || beam_forces.Length != BeamCount)
+                beam_forces = new Tuple<int, int, double>[BeamCount];
+
+            for(int i = 0; i < NodeCount; i++)
+            {
+                points_positions[i] = new Point3d(Nodes[i].Pos0.x, Nodes[i].Pos0.y, Nodes[i].Pos0.z);
+                reaction_forces[i] = new Vector3d(Nodes[i].ReactionForce.x, Nodes[i].ReactionForce.y, Nodes[i].ReactionForce.z);
+            }
+            for(int i = 0; i < BeamCount; i++)
+                beam_forces[i] = new Tuple<int, int, double>(Beams[i].StartNode, Beams[i].EndNode, Beams[i].InternalForce);
 
         }
 
