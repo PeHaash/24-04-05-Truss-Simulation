@@ -710,15 +710,16 @@ namespace Liz
             for (int i = 0; i < Step_count; i++)
             {
                 Lk_UpdateBeam(BeamCount, Beams.View, Nodes.View, ForceOutputsFromBeams.View);
-                device.Synchronize();
+                //device.Synchronize();
                 Lk_UpdateNodeForcesAndDamper(NodeCount, Nodes.View, ForceOutputsFromBeams.View, DamperConstant);
-                device.Synchronize();
+                //device.Synchronize();
                 Lk_UpdateSupportNodes(SupportedNodesCount, Nodes.View, SupportedNodesIndexes.View);
-                device.Synchronize();
+                //device.Synchronize();
                 // next phases: sum the free force and output it
                 Lk_UpdateNodes(NodeCount, Nodes.View, DeltaTime);
-                device.Synchronize();
+                
             }
+            device.Synchronize();
             return -1;
         }
         public void Receive(ref Point3d[] points_positions, ref Vector3d[] reaction_forces, ref Tuple<int, int, double>[] beam_forces)
@@ -732,7 +733,7 @@ namespace Liz
                 beam_forces = new Tuple<int, int, double>[BeamCount];
 
             Node[] tempNodes = new Node[NodeCount];
-            Beam[] tempBeams = new Beam[NodeCount];
+            Beam[] tempBeams = new Beam[BeamCount];
 
             // send it back to the CPU memory
             Beams.CopyToCPU(tempBeams);
