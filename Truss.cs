@@ -35,7 +35,6 @@ using Grasshopper.Kernel.Types;*/
  * and yes, it get copied all over the data set in the grasshopper. pfff
  * and we add damper, free force, etc to our code first. Then we go for the GPU.
 */
-
 [assembly: System.Runtime.CompilerServices.InternalsVisibleToAttribute("ILGPURuntime")]
 
 
@@ -584,7 +583,7 @@ namespace Liz
         // NO DOUBLE HERE, ONLY FLOATS
         // general data:
         private float DeltaTime, DamperConstant;
-        private int NodeCount, BeamCount;
+        private int NodeCount, BeamCount, SupportedNodesCount;
         private bool ContextAllocated = false;
 
         // compiled data: this things are on the GPU!!, and then they will be copied to the compiled part
@@ -618,10 +617,11 @@ namespace Liz
             DeltaTime = (float)deltaTime;
             NodeCount = ProtoNodes.Count;
             BeamCount = ProtoBeams.Count;
+            SupportedNodesCount = ProtoNodes.Count(item => item.SupportType != 0);
             Node[] tempNodes = new Node[NodeCount];
             Beam[] tempBeams = new Beam[BeamCount];
             Triple[] tempFofb = new Triple[BeamCount * 2]; // later we just copy it, we want it to be all zero
-            int[] tempSupportedNodesIndexes = new int[ProtoNodes.Count(item => item.SupportType != 0)];
+            int[] tempSupportedNodesIndexes = new int[SupportedNodesCount];
             // make support node indexes
             int sn_po = 0;
             for (int i = 0; i < NodeCount; i++)
@@ -713,7 +713,7 @@ namespace Liz
                 device.Synchronize();
                 Lk_UpdateNodeForcesAndDamper(NodeCount, Nodes.View, ForceOutputsFromBeams.View, DamperConstant);
                 device.Synchronize();
-                Lk_UpdateSupportNodes(NodeCount, Nodes.View, SupportedNodesIndexes.View);
+                Lk_UpdateSupportNodes(SupportedNodesCount, Nodes.View, SupportedNodesIndexes.View);
                 device.Synchronize();
                 // next phases: sum the free force and output it
                 Lk_UpdateNodes(NodeCount, Nodes.View, DeltaTime);
@@ -931,3 +931,4 @@ namespace Liz
 
     }
 }
+
