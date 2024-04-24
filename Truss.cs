@@ -85,7 +85,7 @@ namespace Liz
     public interface ISimulator
     {
         int Type { set; get; }
-        void Send(List<ProtoNode> ProtoNodes, List<ProtoBeam> ProtoBeams);
+        void Send(List<ProtoNode> ProtoNodes, List<ProtoBeam> ProtoBeams, double deltaTime, double damperConstant);
         double Update(int Step_count);
         void Receive(ref Point3d[] points_positions, ref Vector3d[] reaction_forces, ref Tuple<int, int, double>[] beam_forces);
 
@@ -178,7 +178,7 @@ namespace Liz
 
         public void Compile()
         {
-            Simulator.Send(ProtoNodes, ProtoBeams);
+            Simulator.Send(ProtoNodes, ProtoBeams, DeltaTime, DamperConstant);
         }
         public double Update(int Step_Count)
         {
@@ -222,13 +222,17 @@ namespace Liz
                         SimulatorType = 4;
                         break;
                     case "ILGPU-OpenCL":
-                        SimulatorType = 3; break;
+                        SimulatorType = 3; 
+                        break;
                     case "ILGPU-CPU":
-                        SimulatorType = 2; break;
+                        SimulatorType = 2; 
+                        break;
                     case "ThreadCPU":
-                        SimulatorType = 1; break;
+                        SimulatorType = 1; 
+                        break;
                     default:
-                        SimulatorType = 0; break;
+                        SimulatorType = 0; 
+                        break;
                 }
             }
             //SetSimulatorType
@@ -273,7 +277,7 @@ namespace Liz
 
     public class CPU_Simulator : ISimulator
     {
-        private readonly double DeltaTime, DamperConstant;
+        private double DeltaTime, DamperConstant;
         private int NodeCount, BeamCount;
         // compiled data: this things are kept to work in the update with them!!
         private Node[] Nodes;
@@ -282,23 +286,26 @@ namespace Liz
         private int[] SupportedNodesIndexes;
         // the update function
         private Func<int, double> Updatetype;
-        public int Type{
-            get { return Type; }
-            set {
-                    if (value == 1)
-                        Updatetype = UpdateParallelFor;
-                    if (value == 0)
-                        Updatetype = UpdateConventional;
-                    Type = value; 
-                }
+        public int Type
+        {
+            get { return (Updatetype == UpdateParallelFor) ? 1 : 0; }
+            set
+            {
+                if (value == 1)
+                    Updatetype = UpdateParallelFor;
+                if (value == 0)
+                    Updatetype = UpdateConventional;
             }
+        }
 
 
         internal CPU_Simulator()
         {
             Type = 0;
         }
-        public void Send(List<ProtoNode> ProtoNodes, List<ProtoBeam> ProtoBeams) {
+        public void Send(List<ProtoNode> ProtoNodes, List<ProtoBeam> ProtoBeams, double deltaTime, double damperConstant) {
+            DeltaTime = deltaTime;
+            DamperConstant = damperConstant;
             NodeCount = ProtoNodes.Count;
             BeamCount = ProtoBeams.Count;
             Nodes = new Node[NodeCount];
@@ -327,7 +334,7 @@ namespace Liz
 
             for(int i = 0; i < NodeCount; i++)
             {
-                points_positions[i] = new Point3d(Nodes[i].Pos0.x, Nodes[i].Pos0.y, Nodes[i].Pos0.z);
+                points_positions[i] = new Point3d(Nodes[i].Position.x, Nodes[i].Position.y, Nodes[i].Position.z);
                 reaction_forces[i] = new Vector3d(Nodes[i].ReactionForce.x, Nodes[i].ReactionForce.y, Nodes[i].ReactionForce.z);
             }
             for(int i = 0; i < BeamCount; i++)
@@ -570,7 +577,7 @@ namespace Liz
     {
         // NO DOUBLE HERE, ONLY FLOATS
         // general data:
-        private readonly float DeltaTime, DamperConstant;
+        private float DeltaTime, DamperConstant;
         private int NodeCount, BeamCount;
         private bool ContextAllocated = false;
 
@@ -599,7 +606,9 @@ namespace Liz
         // functions to use
         //public functions and stuff related to GPU
         public int Type { set; get; }
-        public void Send(List<ProtoNode> ProtoNodes, List<ProtoBeam> ProtoBeams) {
+        public void Send(List<ProtoNode> ProtoNodes, List<ProtoBeam> ProtoBeams, double deltaTime, double damperConstant) {
+            DamperConstant = (float)damperConstant;
+            DeltaTime = (float)deltaTime;
             NodeCount = ProtoNodes.Count;
             BeamCount = ProtoBeams.Count;
             Node[] tempNodes = new Node[NodeCount];
@@ -723,7 +732,7 @@ namespace Liz
 
             for (int i = 0; i < NodeCount; i++)
             {
-                points_positions[i] = new Point3d(tempNodes[i].Pos0.x, tempNodes[i].Pos0.y, tempNodes[i].Pos0.z);
+                points_positions[i] = new Point3d(tempNodes[i].Position.x, tempNodes[i].Position.y, tempNodes[i].Position.z);
                 reaction_forces[i] = new Vector3d(tempNodes[i].ReactionForce.x, tempNodes[i].ReactionForce.y, tempNodes[i].ReactionForce.z);
             }
             for (int i = 0; i < BeamCount; i++)
