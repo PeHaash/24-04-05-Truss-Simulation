@@ -935,6 +935,7 @@ namespace Liz
 
     public interface ISimulator
     {
+        int Type { set; get; }
         void Send(List<ProtoNode> ProtoNodes, List<ProtoBeam> ProtoBeams);
         double Update(int Step_count);
         void Receive(ref Point3d[] points_positions, ref Vector3d[] reaction_forces, ref Tuple<int, int, double>[] beam_forces);
@@ -1081,8 +1082,27 @@ namespace Liz
                         SimulatorType = 0; break;
                 }
             }
-            //SetSimulatorType 
-
+            //SetSimulatorType
+            switch (SimulatorType)
+            {
+                case 0:
+                    Simulator = new CPU_Simulator();
+                    break;
+                case 1:
+                    Simulator = new CPU_Simulator();
+                    break;
+                case 2:
+                    Simulator = new ILGPU_Simulator();
+                    break;
+                case 3:
+                    Simulator = new ILGPU_Simulator();
+                    break;
+                case 4:
+                    Simulator = new ILGPU_Simulator();
+                break;
+            }    
+            Simulator.Type = SimulatorType;
+            
         }
 
         private int NearestNode(Point3d p)
@@ -1102,7 +1122,7 @@ namespace Liz
 
     }
 
-    public class CPU_Simulator: ISimulator
+    public class CPU_Simulator : ISimulator
     {
         private double DeltaTime, DamperConstant;
         private int NodeCount, BeamCount;
@@ -1113,14 +1133,21 @@ namespace Liz
         private int[] SupportedNodesIndexes;
         // the update function
         private Func<int, double> Updatetype;
+        public int Type{
+            get { return Type; }
+            set {
+                    if (value == 1)
+                        Updatetype = UpdateParallelFor;
+                    if (value == 0)
+                        Updatetype = UpdateConventional;
+                    Type = value; 
+                }
+            }
 
-        internal CPU_Simulator(bool parallel)
+
+        internal CPU_Simulator()
         {
-            if (parallel)
-                Updatetype = UpdateParallelFor;
-            else
-                Updatetype = UpdateConventional;
-            
+            Type = 0;
         }
         public void Send(List<ProtoNode> ProtoNodes, List<ProtoBeam> ProtoBeams) {
             NodeCount = ProtoNodes.Count;
@@ -1231,7 +1258,7 @@ namespace Liz
                         Beams[i].InternalForce
                         );
                     // comp -> int mosbat -> vector force mosbat be samte end;
-                    Nodes[Beams[i].StartNode].Force -= vector_force; /// -=, and stuff like that is saving my code:implicit copying in handled
+                    Nodes[Beams[i].StartNode].Force -= vector_force;
                     Nodes[Beams[i].EndNode].Force += vector_force;
                 });
 
@@ -1390,11 +1417,157 @@ namespace Liz
 
     }
 
-    public class ILGPU_Simulator: ISimulator
+    public class ILGPU_Simulator : ISimulator
     {
+        // NO DOUBLE HERE, ONLY FLOATS
+        // general data:
+        private float DeltaTime, DamperConstant;
+        private int NodeCount, BeamCount;
+        private bool ContextAllocated = false;
+        // compiled data:
+        //private fNode[] Nodes; ina lazem nistan, movaghati dorost mishan, miferestimeshoon rooye gpu
+        //private fBeam[] Beams;
+        //private int[] ForcedNodesIndexes;
+        //private int[] SupportedNodesIndexes;
+
+        // compiled data: this things are on the GPU!!, and then they will be copied to the compiled part
+        Context context;
+        Accelerator device;
+        private MemoryBuffer1D<fNode, Stride1D.Dense> Nodes;
+        private MemoryBuffer1D<fBeam, Stride1D.Dense> Beams;
+        private MemoryBuffer1D<float, Stride1D.Dense> weigthOutputsFromBeams;
+        //private MemoryBuffer1D<int, Stride1D.Dense> ForcedNodesIndexes;
+        private MemoryBuffer1D<int, Stride1D.Dense> SupportedNodesIndexes;
+        //private MemoryBuffer1D<float, Stride1D.Dense> gpuDamperConstant;
+        //private MemoryBuffer1D<float, Stride1D.Dense> gpuDeltaTime;
+        // kernel functions:
+        Action<Index1D, ArrayView<fBeam>, ArrayView<float>, int> Lk_UpdateBeam;
+        Action<Index1D, ArrayView<fNode>, ArrayView<float>, float> Lk_UpdateNodeForcesAndDamper;
+        //Action<Index1D, ArrayView<fNode>, ArrayView<float>> Lk_damper;
+        Action<Index1D, ArrayView<fNode>, ArrayView<int>> Lk_UpdateSupportNodes;
+        Action<Index1D, ArrayView<fNode>, float> Lk_UpdateNodes;
+
+        internal ILGPU_Simulator()
+        {
+            Type = 2;
+        }
+
+        // functions to use
+        //public functions and stuff related to GPU
+        public int Type { set; get; }
         public void Send(List<ProtoNode> ProtoNodes, List<ProtoBeam> ProtoBeams) { }
         public double Update(int Step_count) { return 0; }
         public void Receive(ref Point3d[] points_positions, ref Vector3d[] reaction_forces, ref Tuple<int, int, double>[] beam_forces) { }
+
+
+        private struct Triple
+        {
+            public float x, y, z;
+            public Triple(float x, float y, float z)
+            {
+                this.x = x;
+                this.y = y;
+                this.z = z;
+            }
+            internal Triple(Point3d p)
+            {
+                x = (float)p.X; y = (float)p.Y; z = (float)p.Z;
+            }
+            internal Triple(Vector3d v)
+            {
+                x = (float)v.X; y = (float)v.Y; z = (float)v.Z;
+            }
+            internal Triple(Triple start, Triple end, float len)
+            {
+                // make a vector, from start to end with a set len
+                x = end.x - start.x; y = end.y - start.y; z = end.z - start.z;
+                float t = XMath.Sqrt(x * x + y * y + z * z); // now_len, here!
+                t = len / t; // to adjust the length
+                x *= t; y *= t; z *= t;
+            }
+            internal float Len()
+            {
+                return XMath.Sqrt(x * x + y * y + z * z);
+            }
+            
+            internal static float Distance(Triple a, Triple b)
+            {
+                //return Math.Sqrt(Math.Pow(a.x - b.x, 2) + Math.Pow(a.y - b.y, 2) + Math.Pow(a.z - b.z, 2));
+                return XMath.Sqrt((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y) + (a.z - b.z) * (a.z - b.z));
+            }
+            public static Triple operator +(Triple a, Triple b)
+            {
+                return new Triple(a.x + b.x, a.y + b.y, a.z + b.z);
+            }
+            public static Triple operator -(Triple a, Triple b)
+            {
+                return new Triple(a.x - b.x, a.y - b.y, a.z - b.z);
+            }
+            public static Triple operator *(Triple a, float b)
+            {
+                return new Triple(a.x * b, a.y * b, a.z * b);
+            }
+
+            private struct Node
+            {
+                public Triple Pos0;
+                public Triple Position;
+                public Triple Velocity;
+                public float OneOverMass;
+                public Triple ConstantForce;
+                public Triple Force;
+                public int SupportType;
+                public Triple ReactionForce;
+                public int StartRange, EndRange;
+                
+                internal Node(ProtoNode p0)
+                {
+                    Pos0 = new Triple(p0.Pos0);
+                    Position = new Triple(p0.Pos0);
+                    Velocity = new Triple();
+                    OneOverMass = 1 / (float)p0.Mass;
+                    ConstantForce = new Triple(p0.Force);
+                    Force = new Triple();
+                    SupportType = p0.SupportType;
+                    ReactionForce = new Triple();
+                    StartRange = EndRange = -1; // should be updated later
+                }
+                internal void UpdateReactionForce()
+                {
+                    Triple nReactionForce = new Triple(
+                        ((SupportType & 4) != 0) ? -Force.x : 0,
+                        ((SupportType & 2) != 0) ? -Force.y : 0,
+                        ((SupportType & 1) != 0) ? -Force.z : 0
+                        );
+                    ReactionForce = nReactionForce;
+                }
+            }
+            private struct Beam
+            {
+                public int StartNode;
+                public int EndNode;
+                public double InitialLength;
+                public double SpringConstant;// { internal set; get; }
+                public double InternalForce;// { internal set; get; } // +: compression beam: push nodes, -: tension beam: pull nodes
+                internal Beam(int startnode, int endnode, double initlen, double sprconst)
+                {
+                    StartNode = startnode;
+                    EndNode = endnode;
+                    InitialLength = initlen;
+                    SpringConstant = sprconst;
+                    InternalForce = 0;
+                }
+                internal Beam(ProtoBeam beam)
+                {
+                    StartNode = beam.Link.Item1;
+                    EndNode = beam.Link.Item2;
+                    InitialLength = beam.Length;
+                    SpringConstant = beam.Stiffness;
+                    InternalForce = 0;
+                }
+            }
+
+        }
     }
 
     public struct ProtoNode
