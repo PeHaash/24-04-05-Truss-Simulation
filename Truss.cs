@@ -935,8 +935,8 @@ namespace Liz
 
     public interface ISimulator
     {
-        void Send(ref ProtoNode nodes, ref ProtoBeam beams);
-        void Update(int Step_count);
+        void Send(List<ProtoNode> ProtoNodes, List<ProtoBeam> ProtoBeams);
+        double Update(int Step_count);
         void Receive(ref Point3d[] points_positions, ref Vector3d[] reaction_forces, ref Tuple<int, int, double>[] beam_forces);
 
     }
@@ -1091,15 +1091,160 @@ namespace Liz
 
     public class CPU_Simulator: ISimulator
     {
-        internal CPU_Simulator()
+        private double DeltaTime, DamperConstant;
+        private int NodeCount, BeamCount;
+        // compiled data: this things are kept to work in the update with them!!
+        private Node[] Nodes;
+        private Beam[] Beams;
+        private int[] ForcedNodesIndexes;
+        private int[] SupportedNodesIndexes;
+        // the update function
+        private Func<int, double> Updatetype;
+
+        internal CPU_Simulator(bool parallel)
+        {
+            if (parallel)
+                Updatetype = UpdateParallelFor;
+            else
+                Updatetype = UpdateConventional;
+            
+        }
+        public void Send(List<ProtoNode> ProtoNodes, List<ProtoBeam> ProtoBeams) {
+            NodeCount = ProtoNodes.Count;
+            BeamCount = ProtoBeams.Count;
+            Nodes = new Node[NodeCount];
+            Beams = new Beam[BeamCount];
+            ForcedNodesIndexes = new int[ProtoNodes.Count(item => !item.Force.IsZero)]; // count number of non, zero forces
+            SupportedNodesIndexes = new int[ProtoNodes.Count(item => item.SupportType != 0)]; // like-wise, for supports
+            // this is also possible with LINQ, but I prefer to keep it simple
+            int fn_po = 0, sn_po = 0;
+            for (int i = 0; i < NodeCount; i++)
+            {
+                Nodes[i] = new Node(ProtoNodes[i]);
+                if (!ProtoNodes[i].Force.IsZero) ForcedNodesIndexes[fn_po++] = i;
+                if (ProtoNodes[i].SupportType != 0) SupportedNodesIndexes[sn_po++] = i;
+            }
+            for (int i = 0; i < BeamCount; i++) Beams[i] = new Beam(ProtoBeams[i]);
+        }
+        public double Update(int Step_count) { return Updatetype(Step_count); }
+        public void Receive(ref Point3d[] points_positions, ref Vector3d[] reaction_forces, ref Tuple<int, int, double>[] beam_forces)
         {
 
         }
-        public void Send(ref ProtoNode nodes, ref ProtoBeam beams) { }
-        public void Update(int Step_count) { }
-        public void Receive(ref Point3d[] points_positions, ref Vector3d[] reaction_forces, ref Tuple<int, int, double>[] beam_forces) { }
 
-        public struct Triple
+        private double UpdateConventional(int Step_count) {
+            double free_forces = 0;
+            // update beams, position is input, force is output
+            for (int iterator = 0; iterator < Step_count; iterator++)
+            {
+                for (int i = 0; i < BeamCount; i++)
+                {
+                    double delta_len = Triple.Distance(Nodes[Beams[i].StartNode].Position, Nodes[Beams[i].EndNode].Position)
+                        - Beams[i].InitialLength;
+                    // deltaLen <0 : newLen is shorter --> compression --> InternalForce should be >0, vice versa
+                    Beams[i].InternalForce = -Beams[i].SpringConstant * delta_len;
+                    // vector from start to end
+                    Triple vector_force = new Triple(
+                        Nodes[Beams[i].StartNode].Position,
+                        Nodes[Beams[i].EndNode].Position,
+                        Beams[i].InternalForce
+                        );
+                    // comp -> int mosbat -> vector force mosbat be samte end;
+                    Nodes[Beams[i].StartNode].Force -= vector_force; /// -=, and stuff like that is saving my code:implicit copying in handled
+                    Nodes[Beams[i].EndNode].Force += vector_force;
+                }
+
+                // add the constant force to some nodes with force
+                for (int i = 0; i < ForcedNodesIndexes.Length; i++)
+                    Nodes[ForcedNodesIndexes[i]].Force += Nodes[ForcedNodesIndexes[i]].ConstantForce;
+
+                // enforce damper constant to all nodes
+                for (int i = 0; i < NodeCount; i++)
+                    Nodes[i].Force -= Nodes[i].Velocity * DamperConstant;
+
+                // make nodes with support 0 in force, put them in the ReactionForce (one of the main outputs!)
+                for (int i = 0; i < SupportedNodesIndexes.Length; i++)
+                {
+                    Nodes[SupportedNodesIndexes[i]].UpdateReactionForce();
+                    Nodes[SupportedNodesIndexes[i]].Force += Nodes[SupportedNodesIndexes[i]].ReactionForce;
+                }
+                // sum the free force, only for the last iteration!
+                if (iterator == Step_count - 1)
+                    for (int i = 0; i < NodeCount; i++)
+                        free_forces += Nodes[i].Force.Len();
+
+                // update nodes  with the force they receive
+                for (int i = 0; i < NodeCount; i++)
+                {
+                    //Acceleration[i] = Force[i] / Mass[i]; // f = m.a
+                    //Velocity[i] += Acceleration[i] * Delta; 
+                    Nodes[i].Velocity += Nodes[i].Force * Nodes[i].OneOverMass * DeltaTime;
+                    Nodes[i].Position += Nodes[i].Velocity * DeltaTime;
+                    Nodes[i].Force = new Triple(); // we are always working with the copies of structs here :/
+                }
+            }
+            return free_forces;
+        }
+        private double UpdateParallelFor(int Step_count) {
+            double free_forces = 0;
+            // update beams, position is input, force is output
+            for (int iterator = 0; iterator < Step_count; iterator++)
+            {
+                free_forces = 0;
+                Parallel.For(0, BeamCount, i =>
+                {
+                    double delta_len = Triple.Distance(Nodes[Beams[i].StartNode].Position, Nodes[Beams[i].EndNode].Position)
+                        - Beams[i].InitialLength;
+                    // deltaLen <0 : newLen is shorter --> compression --> InternalForce should be >0, vice versa
+                    Beams[i].InternalForce = -Beams[i].SpringConstant * delta_len;
+                    // vector from start to end
+                    Triple vector_force = new Triple(
+                        Nodes[Beams[i].StartNode].Position,
+                        Nodes[Beams[i].EndNode].Position,
+                        Beams[i].InternalForce
+                        );
+                    // comp -> int mosbat -> vector force mosbat be samte end;
+                    Nodes[Beams[i].StartNode].Force -= vector_force; /// -=, and stuff like that is saving my code:implicit copying in handled
+                    Nodes[Beams[i].EndNode].Force += vector_force;
+                });
+
+                // add the constant force to some nodes with force
+                Parallel.For(0, ForcedNodesIndexes.Length, i =>
+                {
+                    Nodes[ForcedNodesIndexes[i]].Force += Nodes[ForcedNodesIndexes[i]].ConstantForce;
+                });
+
+                // enforce damper constant to all nodes
+                Parallel.For(0, NodeCount, i =>
+                {
+                    Nodes[i].Force -= Nodes[i].Velocity * DamperConstant;
+                });
+
+                // make nodes with support 0 in force, put them in the ReactionForce (one of the main outputs!)
+                Parallel.For(0, SupportedNodesIndexes.Length, i =>
+                {
+                    Nodes[SupportedNodesIndexes[i]].UpdateReactionForce();
+                    Nodes[SupportedNodesIndexes[i]].Force += Nodes[SupportedNodesIndexes[i]].ReactionForce;
+                });
+
+                // sum the free force, only for the last iteration!, it cannot be parallel because of race condition
+                if (iterator == Step_count - 1)
+                    for (int i = 0; i < NodeCount; i++)
+                        free_forces += Nodes[i].Force.Len();
+
+                // update nodes: with the force they receive
+                Parallel.For(0, NodeCount, i =>
+                {
+                    Nodes[i].Velocity += Nodes[i].Force * Nodes[i].OneOverMass * DeltaTime;
+                    Nodes[i].Position += Nodes[i].Velocity * DeltaTime;
+                    Nodes[i].Force = new Triple(); // we are always working with the copies of structs here :/
+                });
+            }
+            return free_forces;
+        }
+
+
+        private struct Triple
         {
             public double x, y, z;
             public Triple(double x, double y, double z)
@@ -1148,16 +1293,16 @@ namespace Liz
             }
 
         }
-        public struct Node
+        private struct Node
         {
-            public Triple Pos0 { internal set; get; }
-            public Triple Position { internal set; get; }
-            public Triple Velocity { internal set; get; }
-            public double OneOverMass { internal set; get; }
-            public Triple ConstantForce { internal set; get; } // only on some nodes!
-            public Triple Force { internal set; get; }
-            public int SupportType { internal set; get; }
-            public Triple ReactionForce { internal set; get; } // only on some nodes!
+            public Triple Pos0;// { internal set; get; }
+            public Triple Position;// { internal set; get; }
+            public Triple Velocity;// { internal set; get; }
+            public double OneOverMass;// { internal set; get; }
+            public Triple ConstantForce;// { internal set; get; } // only on some nodes!
+            public Triple Force;// { internal set; get; }
+            public int SupportType;// { internal set; get; }
+            public Triple ReactionForce;// { internal set; get; } // only on some nodes!
             internal Node(Point3d p0, Vector3d force, double mass, int support_type)
             {
                 Pos0 = new Triple(p0);
@@ -1167,6 +1312,17 @@ namespace Liz
                 ConstantForce = new Triple(force);
                 Force = new Triple();
                 SupportType = support_type;
+                ReactionForce = new Triple();
+            }
+            internal Node(ProtoNode p0)
+            {
+                Pos0 = new Triple(p0.Pos0);
+                Position = new Triple(p0.Pos0);
+                Velocity = new Triple();
+                OneOverMass = 1 / p0.Mass;
+                ConstantForce = new Triple(p0.Force);
+                Force = new Triple();
+                SupportType = p0.SupportType;
                 ReactionForce = new Triple();
             }
             internal void UpdateReactionForce()
@@ -1180,13 +1336,13 @@ namespace Liz
                 //Force += ReactionForce; kinda side-effect, cleaned it
             }
         }
-        public struct Beam
+        private struct Beam
         {
-            public int StartNode { internal set; get; }
-            public int EndNode { internal set; get; }
-            public double InitialLength { internal set; get; }
-            public double SpringConstant { internal set; get; }
-            public double InternalForce { internal set; get; } // +: compression beam: push nodes, -: tension beam: pull nodes
+            public int StartNode;// { internal set; get; }
+            public int EndNode;// { internal set; get; }
+            public double InitialLength;// { internal set; get; }
+            public double SpringConstant;// { internal set; get; }
+            public double InternalForce;// { internal set; get; } // +: compression beam: push nodes, -: tension beam: pull nodes
             internal Beam(int startnode, int endnode, double initlen, double sprconst)
             {
                 StartNode = startnode;
@@ -1195,14 +1351,22 @@ namespace Liz
                 SpringConstant = sprconst;
                 InternalForce = 0;
             }
+            internal Beam(ProtoBeam beam)
+            {
+                StartNode = beam.Link.Item1;
+                EndNode = beam.Link.Item2;
+                InitialLength = beam.Length;
+                SpringConstant = beam.Stiffness;
+                InternalForce = 0;
+            }
         }
 
     }
 
     public class ILGPU_Simulator: ISimulator
     {
-        public void Send(ref ProtoNode nodes, ref ProtoBeam beams) { }
-        public void Update(int Step_count) { }
+        public void Send(List<ProtoNode> ProtoNodes, List<ProtoBeam> ProtoBeams) { }
+        public double Update(int Step_count) { return 0; }
         public void Receive(ref Point3d[] points_positions, ref Vector3d[] reaction_forces, ref Tuple<int, int, double>[] beam_forces) { }
     }
 
