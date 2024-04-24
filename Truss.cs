@@ -1433,9 +1433,9 @@ namespace Liz
         // compiled data: this things are on the GPU!!, and then they will be copied to the compiled part
         Context context;
         Accelerator device;
-        private MemoryBuffer1D<fNode, Stride1D.Dense> Nodes;
-        private MemoryBuffer1D<fBeam, Stride1D.Dense> Beams;
-        private MemoryBuffer1D<float, Stride1D.Dense> weigthOutputsFromBeams;
+        private MemoryBuffer1D<Node, Stride1D.Dense> Nodes;
+        private MemoryBuffer1D<Beam, Stride1D.Dense> Beams;
+        private MemoryBuffer1D<float, Stride1D.Dense> ForceOutputsFromBeams; //fofb
         //private MemoryBuffer1D<int, Stride1D.Dense> ForcedNodesIndexes;
         private MemoryBuffer1D<int, Stride1D.Dense> SupportedNodesIndexes;
         //private MemoryBuffer1D<float, Stride1D.Dense> gpuDamperConstant;
@@ -1455,10 +1455,124 @@ namespace Liz
         // functions to use
         //public functions and stuff related to GPU
         public int Type { set; get; }
-        public void Send(List<ProtoNode> ProtoNodes, List<ProtoBeam> ProtoBeams) { }
+        public void Send(List<ProtoNode> ProtoNodes, List<ProtoBeam> ProtoBeams) {
+            /**/
+            NodeCount = ProtoNodes.Count;
+            BeamCount = ProtoBeams.Count;
+            Node[] tempNodes = new Node[NodeCount];
+            Beam[] tempBeams = new Beam[BeamCount];
+            //int[] tempFofb = new int[BeamCount * 2]; // later !!
+            int[] tempSupportedNodesIndexes = new int[ProtoNodes.Count(item => item.SupportType != 0)];
+            int sn_po = 0;
+            for (int i = 0; i < NodeCount; i++)
+            {
+                tempNodes[i] = new Node(ProtoNodes[i]);
+                if (ProtoNodes[i].SupportType != 0) tempSupportedNodesIndexes[sn_po++] = i;
+            }
+            for (int i = 0; i < BeamCount; i++) tempBeams[i] = new Beam(ProtoBeams[i]);
+
+            // make the FoFb ok! & other things
+            List<List<Tuple<int, int>>> graph = new List<List<Tuple<int,int>>>(NodeCount);
+            for(int  i = 0; i < NodeCount; i++)
+            {
+                graph[i] = new List<Tuple<int, int>>();
+            }
+            for(int i = 0; i < BeamCount; i++)
+            {
+                graph[ProtoBeams[i].Link.Item1].Add(new Tuple<int,int>(i, -1)); // start node: -1
+                graph[ProtoBeams[i].Link.Item2].Add(new Tuple<int, int>(i, 1)); // end node : 1
+            }
+            int checked_elements = 0;
+            for(int i = 0; i < NodeCount; i++)
+            {
+                // update the node, add start and end of the range of the neighbors
+                Node tempn = tempNodes[i];
+                tempn.StartRange = checked_elements;
+
+                // update each beam's detail that is connected to this particular node
+                for(int j = 0; j < graph[i].Count; j++)
+                {
+                    Beam tempb = tempBeams[graph[i][j].Item1];
+                    if (graph[i][j].Item2 == -1)
+                    {
+                        tempb.StartNodePointer = checked_elements;
+                    }
+                    else 
+                    {
+                        tempb.EndNodePointer = checked_elements;
+                    }
+                    checked_elements++;
+                    tempBeams[graph[i][j].Item1] = tempb;
+                }
+                tempn.EndRange = checked_elements;
+                tempNodes[i] = tempn;
+            }
+
+
+            /**/
+            if (!ContextAllocated)
+            {
+
+                context = Context.Create(builder => builder.Default().EnableAlgorithms().Math(MathMode.Fast32BitOnly));
+                if (Type == 2)
+                    device = context.GetCPUDevice(0).CreateAccelerator(context);
+                if (Type == 3)
+                    device = context.GetCLDevice(0).CreateAccelerator(context);
+                if (Type == 4)
+                    device = context.GetCudaDevice(0).CreateAccelerator(context);
+                // Load all kernels
+                Lk_UpdateBeam;
+                Lk_UpdateNodeForcesAndDamper;
+                Lk_UpdateSupportNodes;
+                Lk_UpdateNodes;
+
+                Lk_beam = device.LoadAutoGroupedStreamKernel<Index1D, ArrayView<fBeam>, ArrayView<fNode>, int>(KernelBeam2);
+                /*debug1*/
+                Lk_constant_force = device.LoadAutoGroupedStreamKernel<Index1D, ArrayView<fNode>, ArrayView<int>>(KernelConstantForce);
+                Lk_damper = device.LoadAutoGroupedStreamKernel<Index1D, ArrayView<fNode>, ArrayView<float>>(KernelDamper);
+                Lk_support_nodes = device.LoadAutoGroupedStreamKernel<Index1D, ArrayView<fNode>, ArrayView<int>>(KernelSupprotNodes);
+                Lk_nodes = device.LoadAutoGroupedStreamKernel<Index1D, ArrayView<fNode>, ArrayView<float>>(KernelNodes);
+
+                ContextAllocated = true;
+                /**/
+            }
+            else
+            {
+                // we have came here before, so we should despose the previous things on GPU to avoid memmory leak!
+                Nodes.Dispose();
+                Beams.Dispose();
+                ForceOutputsFromBeams.Dispose();
+                SupportedNodesIndexes.Dispose();
+            }
+            // now send stuff into the GPU!
+            Nodes = device.Allocate1D(tempNodes);
+
+
+            gpuNodes = device.Allocate1D(fNodes);
+            gpuBeams = device.Allocate1D(fBeams);
+            gpuForcedNodesIndexes = device.Allocate1D(ForcedNodesIndexes);
+            gpuSupportedNodesIndexes = device.Allocate1D(SupportedNodesIndexes);
+            gpuDamperConstant.CopyFromCPU(new float[] { (float)DamperConstant });
+            gpuDeltaTime.CopyFromCPU(new float[] { (float)DeltaTime });
+            /**/
+            // end sending them
+            return 0;
+        }
         public double Update(int Step_count) { return 0; }
         public void Receive(ref Point3d[] points_positions, ref Vector3d[] reaction_forces, ref Tuple<int, int, double>[] beam_forces) { }
 
+        ~ILGPU_Simulator()
+        {
+            if (ContextAllocated)
+            {
+                Nodes.Dispose();
+                Beams.Dispose();
+                ForceOutputsFromBeams.Dispose(); 
+                SupportedNodesIndexes.Dispose();
+                device.Dispose();
+                context.Dispose();
+            }
+        }
 
         private struct Triple
         {
@@ -1489,7 +1603,7 @@ namespace Liz
             {
                 return XMath.Sqrt(x * x + y * y + z * z);
             }
-            
+
             internal static float Distance(Triple a, Triple b)
             {
                 //return Math.Sqrt(Math.Pow(a.x - b.x, 2) + Math.Pow(a.y - b.y, 2) + Math.Pow(a.z - b.z, 2));
@@ -1507,67 +1621,61 @@ namespace Liz
             {
                 return new Triple(a.x * b, a.y * b, a.z * b);
             }
-
-            private struct Node
-            {
-                public Triple Pos0;
-                public Triple Position;
-                public Triple Velocity;
-                public float OneOverMass;
-                public Triple ConstantForce;
-                public Triple Force;
-                public int SupportType;
-                public Triple ReactionForce;
-                public int StartRange, EndRange;
-                
-                internal Node(ProtoNode p0)
-                {
-                    Pos0 = new Triple(p0.Pos0);
-                    Position = new Triple(p0.Pos0);
-                    Velocity = new Triple();
-                    OneOverMass = 1 / (float)p0.Mass;
-                    ConstantForce = new Triple(p0.Force);
-                    Force = new Triple();
-                    SupportType = p0.SupportType;
-                    ReactionForce = new Triple();
-                    StartRange = EndRange = -1; // should be updated later
-                }
-                internal void UpdateReactionForce()
-                {
-                    Triple nReactionForce = new Triple(
-                        ((SupportType & 4) != 0) ? -Force.x : 0,
-                        ((SupportType & 2) != 0) ? -Force.y : 0,
-                        ((SupportType & 1) != 0) ? -Force.z : 0
-                        );
-                    ReactionForce = nReactionForce;
-                }
-            }
-            private struct Beam
-            {
-                public int StartNode;
-                public int EndNode;
-                public double InitialLength;
-                public double SpringConstant;// { internal set; get; }
-                public double InternalForce;// { internal set; get; } // +: compression beam: push nodes, -: tension beam: pull nodes
-                internal Beam(int startnode, int endnode, double initlen, double sprconst)
-                {
-                    StartNode = startnode;
-                    EndNode = endnode;
-                    InitialLength = initlen;
-                    SpringConstant = sprconst;
-                    InternalForce = 0;
-                }
-                internal Beam(ProtoBeam beam)
-                {
-                    StartNode = beam.Link.Item1;
-                    EndNode = beam.Link.Item2;
-                    InitialLength = beam.Length;
-                    SpringConstant = beam.Stiffness;
-                    InternalForce = 0;
-                }
-            }
-
         }
+        private struct Node
+        {
+            public Triple Pos0;
+            public Triple Position;
+            public Triple Velocity;
+            public float OneOverMass;
+            public Triple ConstantForce;
+            public Triple Force;
+            public int SupportType;
+            public Triple ReactionForce;
+            public int StartRange, EndRange;
+                
+            internal Node(ProtoNode p0)
+            {
+                Pos0 = new Triple(p0.Pos0);
+                Position = new Triple(p0.Pos0);
+                Velocity = new Triple();
+                OneOverMass = 1 / (float)p0.Mass;
+                ConstantForce = new Triple(p0.Force);
+                Force = new Triple();
+                SupportType = p0.SupportType;
+                ReactionForce = new Triple();
+                StartRange = EndRange = -1; // should be updated later
+            }
+            internal void UpdateReactionForce()
+            {
+                Triple nReactionForce = new Triple(
+                    ((SupportType & 4) != 0) ? -Force.x : 0,
+                    ((SupportType & 2) != 0) ? -Force.y : 0,
+                    ((SupportType & 1) != 0) ? -Force.z : 0
+                    );
+                ReactionForce = nReactionForce;
+            }
+        }
+        private struct Beam
+        {
+            public int StartNode;
+            public int EndNode;
+            public float InitialLength;
+            public float SpringConstant;
+            public float InternalForce;// +: compression beam: push nodes, -: tension beam: pull nodes
+            public int StartNodePointer, EndNodePointer;
+                
+            internal Beam(ProtoBeam beam)
+            {
+                StartNode = beam.Link.Item1;
+                EndNode = beam.Link.Item2;
+                InitialLength = (float)beam.Length;
+                SpringConstant = (float)beam.Stiffness;
+                InternalForce = 0;
+                StartNodePointer = EndNodePointer = -1;
+            }
+        }
+
     }
 
     public struct ProtoNode
