@@ -36,6 +36,8 @@ using Grasshopper.Kernel.Types;*/
  * and we add damper, free force, etc to our code first. Then we go for the GPU.
 */
 
+[assembly: System.Runtime.CompilerServices.InternalsVisibleToAttribute("ILGPURuntime")]
+
 
 namespace Liz
 {
@@ -102,7 +104,7 @@ namespace Liz
 
         // these data are the outputs of our truss
         public Point3d[] oNodes;
-        public Vector3d[] oReactionForces;  
+        public Vector3d[] oReactionForces;
         public Tuple<int, int, double>[] oBeamForces;
         // details of the simulator we are using
         internal int SimulatorType { private set; get; } // 0: CPU / 1: ThreadCPU / 2: ILGPU-CPU / 3: ILGPU-OpenCL / 4: ILGPU-CUDA 
@@ -215,23 +217,24 @@ namespace Liz
         private void SetSimulatorType(string deviceType, int deviceCode = -1)
         {
             // 0: CPU / 1: ThreadCPU / 2: ILGPU-CPU / 3: ILGPU-OpenCL / 4: ILGPU-CUDA
-            if (deviceCode == -1) {
+            if (deviceCode == -1)
+            {
                 switch (deviceType)
                 {
                     case "ILGPU-CUDA":
                         SimulatorType = 4;
                         break;
                     case "ILGPU-OpenCL":
-                        SimulatorType = 3; 
+                        SimulatorType = 3;
                         break;
                     case "ILGPU-CPU":
-                        SimulatorType = 2; 
+                        SimulatorType = 2;
                         break;
                     case "ThreadCPU":
-                        SimulatorType = 1; 
+                        SimulatorType = 1;
                         break;
                     default:
-                        SimulatorType = 0; 
+                        SimulatorType = 0;
                         break;
                 }
             }
@@ -252,10 +255,10 @@ namespace Liz
                     break;
                 case 4:
                     Simulator = new ILGPU_Simulator();
-                break;
-            }    
+                    break;
+            }
             Simulator.Type = SimulatorType;
-            
+
         }
 
         private int NearestNode(Point3d p)
@@ -303,7 +306,8 @@ namespace Liz
         {
             Type = 0;
         }
-        public void Send(List<ProtoNode> ProtoNodes, List<ProtoBeam> ProtoBeams, double deltaTime, double damperConstant) {
+        public void Send(List<ProtoNode> ProtoNodes, List<ProtoBeam> ProtoBeams, double deltaTime, double damperConstant)
+        {
             DeltaTime = deltaTime;
             DamperConstant = damperConstant;
             NodeCount = ProtoNodes.Count;
@@ -325,24 +329,25 @@ namespace Liz
         public double Update(int Step_count) { return Updatetype(Step_count); }
         public void Receive(ref Point3d[] points_positions, ref Vector3d[] reaction_forces, ref Tuple<int, int, double>[] beam_forces)
         {
-            if(points_positions==null || points_positions.Length!= NodeCount)
+            if (points_positions == null || points_positions.Length != NodeCount)
                 points_positions = new Point3d[NodeCount];
-            if(reaction_forces==null || reaction_forces.Length!= NodeCount)
+            if (reaction_forces == null || reaction_forces.Length != NodeCount)
                 reaction_forces = new Vector3d[NodeCount];
             if (beam_forces == null || beam_forces.Length != BeamCount)
                 beam_forces = new Tuple<int, int, double>[BeamCount];
 
-            for(int i = 0; i < NodeCount; i++)
+            for (int i = 0; i < NodeCount; i++)
             {
                 points_positions[i] = new Point3d(Nodes[i].Position.x, Nodes[i].Position.y, Nodes[i].Position.z);
                 reaction_forces[i] = new Vector3d(Nodes[i].ReactionForce.x, Nodes[i].ReactionForce.y, Nodes[i].ReactionForce.z);
             }
-            for(int i = 0; i < BeamCount; i++)
+            for (int i = 0; i < BeamCount; i++)
                 beam_forces[i] = new Tuple<int, int, double>(Beams[i].StartNode, Beams[i].EndNode, Beams[i].InternalForce);
 
         }
 
-        private double UpdateConventional(int Step_count) {
+        private double UpdateConventional(int Step_count)
+        {
             double free_forces = 0;
             // update beams, position is input, force is output
             for (int iterator = 0; iterator < Step_count; iterator++)
@@ -395,7 +400,8 @@ namespace Liz
             }
             return free_forces;
         }
-        private double UpdateParallelFor(int Step_count) {
+        private double UpdateParallelFor(int Step_count)
+        {
             double free_forces = 0;
             // update beams, position is input, force is output
             for (int iterator = 0; iterator < Step_count; iterator++)
@@ -476,7 +482,7 @@ namespace Liz
                 // make a vector, from start to end with a set len
                 x = end.x - start.x; y = end.y - start.y; z = end.z - start.z;
                 double t = Math.Sqrt(Math.Pow(x, 2) + Math.Pow(y, 2) + Math.Pow(z, 2)); // now_len, here!
-                                                                                            //if (t == 0) it will crash, but we shouldn't have zero len here!
+                                                                                        //if (t == 0) it will crash, but we shouldn't have zero len here!
                 t = len / t; // to adjust the length
                 x *= t; y *= t; z *= t;
             }
@@ -584,11 +590,11 @@ namespace Liz
         // compiled data: this things are on the GPU!!, and then they will be copied to the compiled part
         Context context;
         Accelerator device;
-        private MemoryBuffer1D<Node, Stride1D.Dense> Nodes;
-        private MemoryBuffer1D<Beam, Stride1D.Dense> Beams;
-        private MemoryBuffer1D<Triple, Stride1D.Dense> ForceOutputsFromBeams; //fofb
+        internal MemoryBuffer1D<Node, Stride1D.Dense> Nodes;
+        internal MemoryBuffer1D<Beam, Stride1D.Dense> Beams;
+        internal MemoryBuffer1D<Triple, Stride1D.Dense> ForceOutputsFromBeams; //fofb
         //private MemoryBuffer1D<int, Stride1D.Dense> ForcedNodesIndexes;
-        private MemoryBuffer1D<int, Stride1D.Dense> SupportedNodesIndexes;
+        internal MemoryBuffer1D<int, Stride1D.Dense> SupportedNodesIndexes;
         //private MemoryBuffer1D<float, Stride1D.Dense> gpuDamperConstant;
         //private MemoryBuffer1D<float, Stride1D.Dense> gpuDeltaTime;
         // kernel functions:
@@ -606,7 +612,8 @@ namespace Liz
         // functions to use
         //public functions and stuff related to GPU
         public int Type { set; get; }
-        public void Send(List<ProtoNode> ProtoNodes, List<ProtoBeam> ProtoBeams, double deltaTime, double damperConstant) {
+        public void Send(List<ProtoNode> ProtoNodes, List<ProtoBeam> ProtoBeams, double deltaTime, double damperConstant)
+        {
             DamperConstant = (float)damperConstant;
             DeltaTime = (float)deltaTime;
             NodeCount = ProtoNodes.Count;
@@ -625,32 +632,32 @@ namespace Liz
             for (int i = 0; i < BeamCount; i++) tempBeams[i] = new Beam(ProtoBeams[i]);
 
             // make the FoFb ok & other things
-            List<List<Tuple<int, int>>> graph = new List<List<Tuple<int,int>>>(NodeCount);
-            for(int  i = 0; i < NodeCount; i++)
+            List<List<Tuple<int, int>>> graph = new List<List<Tuple<int, int>>>(NodeCount);
+            for (int i = 0; i < NodeCount; i++)
             {
-                graph[i] = new List<Tuple<int, int>>();
+                graph.Add(new List<Tuple<int, int>>());
             }
-            for(int i = 0; i < BeamCount; i++)
+            for (int i = 0; i < BeamCount; i++)
             {
-                graph[ProtoBeams[i].Link.Item1].Add(new Tuple<int,int>(i, -1)); // start node: -1
+                graph[ProtoBeams[i].Link.Item1].Add(new Tuple<int, int>(i, -1)); // start node: -1
                 graph[ProtoBeams[i].Link.Item2].Add(new Tuple<int, int>(i, 1)); // end node : 1
             }
             int checked_elements = 0;
-            for(int i = 0; i < NodeCount; i++)
+            for (int i = 0; i < NodeCount; i++)
             {
                 // update the node, add start and end of the range of the neighbors
                 Node tempn = tempNodes[i];
                 tempn.StartRange = checked_elements;
 
                 // update each beam's detail that is connected to this particular node
-                for(int j = 0; j < graph[i].Count; j++)
+                for (int j = 0; j < graph[i].Count; j++)
                 {
                     Beam tempb = tempBeams[graph[i][j].Item1];
                     if (graph[i][j].Item2 == -1)
                     {
                         tempb.StartNodePointer = checked_elements;
                     }
-                    else 
+                    else
                     {
                         tempb.EndNodePointer = checked_elements;
                     }
@@ -679,7 +686,7 @@ namespace Liz
                     (UpdateNodesForcesAndDamper);
                 Lk_UpdateSupportNodes = device.LoadAutoGroupedStreamKernel<Index1D, ArrayView<Node>, ArrayView<int>>
                     (UpdateSupportNodes);
-                Lk_UpdateNodes = device.LoadAutoGroupedStreamKernel<Index1D, ArrayView<Node>, float> (UpdateNodes);
+                Lk_UpdateNodes = device.LoadAutoGroupedStreamKernel<Index1D, ArrayView<Node>, float>(UpdateNodes);
                 ContextAllocated = true;
                 /**/
             }
@@ -698,7 +705,8 @@ namespace Liz
             SupportedNodesIndexes = device.Allocate1D(tempSupportedNodesIndexes);
             // end sending them, then will receive them in the Receive function!
         }
-        public double Update(int Step_count) {
+        public double Update(int Step_count)
+        {
             for (int i = 0; i < Step_count; i++)
             {
                 Lk_UpdateBeam(BeamCount, Beams.View, Nodes.View, ForceOutputsFromBeams.View);
@@ -780,14 +788,14 @@ namespace Liz
             {
                 Nodes.Dispose();
                 Beams.Dispose();
-                ForceOutputsFromBeams.Dispose(); 
+                ForceOutputsFromBeams.Dispose();
                 SupportedNodesIndexes.Dispose();
                 device.Dispose();
                 context.Dispose();
             }
         }
 
-        private struct Triple
+        internal struct Triple
         {
             public float x, y, z;
             public Triple(float x, float y, float z)
@@ -839,7 +847,7 @@ namespace Liz
                 return new Triple(a.x * b, a.y * b, a.z * b);
             }
         }
-        private struct Node
+        internal struct Node
         {
             public Triple Pos0;
             public Triple Position;
@@ -850,7 +858,7 @@ namespace Liz
             public int SupportType;
             public Triple ReactionForce;
             public int StartRange, EndRange;
-                
+
             internal Node(ProtoNode p0)
             {
                 Pos0 = new Triple(p0.Pos0);
@@ -873,7 +881,7 @@ namespace Liz
                 ReactionForce = nReactionForce;
             }
         }
-        private struct Beam
+        internal struct Beam
         {
             public int StartNode;
             public int EndNode;
@@ -881,7 +889,7 @@ namespace Liz
             public float SpringConstant;
             public float InternalForce;// +: compression beam: push nodes, -: tension beam: pull nodes
             public int StartNodePointer, EndNodePointer;
-                
+
             internal Beam(ProtoBeam beam)
             {
                 StartNode = beam.Link.Item1;
