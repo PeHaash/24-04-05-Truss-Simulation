@@ -18,23 +18,7 @@ using ILGPU.Runtime.CPU;
 using System.Security.Cryptography;
 using System.Numerics;
 
-/*using Grasshopper;
-using Grasshopper.Kernel;
-using Grasshopper.Kernel.Data;
-using Grasshopper.Kernel.Types;*/
 
-
-/*
- * Here are the rules:
- * We have only one class: Truss, for now
- * Truss keeps both datas: uncompiled and compiled
- * because, if we want to do some optimizations, it is better to just edit the compiled data, not copy it every time.
- * so yes, we don't have a builder.
- * However, later it might be useful to Have multiple trusses: for example if we don't want to have un-uniform masses
- * but for now, only Liz.Truss
- * and yes, it get copied all over the data set in the grasshopper. pfff
- * and we add damper, free force, etc to our code first. Then we go for the GPU.
-*/
 [assembly: System.Runtime.CompilerServices.InternalsVisibleToAttribute("ILGPURuntime")]
 
 
@@ -112,12 +96,29 @@ namespace Liz
         // constructors:
         public Truss(List<Point3d> Points, double MaxBeamLen, string deviceType)
         {
-            // another constructor
+            // another constructor: connect nodes under a certain length
+            ProtoNodes = new List<ProtoNode>();
+            ProtoBeams = new List<ProtoBeam>();
+            for(int i = 0; i < Points.Count; i++)
+            {
+                ProtoNodes.Add(new ProtoNode(Points[i]));
+            }
+            for(int i = 0; i < Points.Count; i++)
+            {
+                for(int j = i + 1; j < Points.Count; j++)
+                {
+                    if (Points[i].DistanceTo(Points[j]) < MaxBeamLen)
+                    {
+                        ProtoBeams.Add(new ProtoBeam(i, j, Points[i].DistanceTo(Points[j])));
+                    }
+                }
+            }
+            SetSimulatorType(deviceType);
 
         }
         public Truss(List<Line> Beam_Lines, double Tolerance, string deviceType)
         {
-            // classic constructor
+            // classic constructor: make the nodes from a list of lines as beams
 
             ProtoNodes = new List<ProtoNode>();
             ProtoBeams = new List<ProtoBeam>();
@@ -175,6 +176,16 @@ namespace Liz
             // simulator
             SimulatorType = other.SimulatorType;
             SetSimulatorType("", SimulatorType);
+        }
+
+        public Truss(List<ProtoNode> nodes, List<ProtoBeam> beams, string deviceType)
+        {
+            // contructor when we make the list in grasshopper, but we should be really careful
+            ProtoNodes = new List<ProtoNode>();
+            ProtoBeams = new List<ProtoBeam>();
+            ProtoNodes = nodes.ToList();
+            ProtoBeams = beams.ToList();
+            SetSimulatorType(deviceType);
         }
 
         public void Compile()
@@ -399,6 +410,8 @@ namespace Liz
             }
             return free_forces;
         }
+
+
         private double UpdateParallelFor(int Step_count)
         {
             double free_forces = 0;
@@ -617,7 +630,7 @@ namespace Liz
             DeltaTime = (float)deltaTime;
             NodeCount = ProtoNodes.Count;
             BeamCount = ProtoBeams.Count;
-            SupportedNodesCount = ProtoNodes.Count(item => item.SupportType != 0);
+            SupportedNodesCount = Math.Max(ProtoNodes.Count(item => item.SupportType != 0), 1);
             Node[] tempNodes = new Node[NodeCount];
             Beam[] tempBeams = new Beam[BeamCount];
             Triple[] tempFofb = new Triple[BeamCount * 2]; // later we just copy it, we want it to be all zero
@@ -907,8 +920,8 @@ namespace Liz
     public struct ProtoNode
     {
         public Point3d Pos0 { internal set; get; } // start position 
-        public Vector3d Force { internal set; get; }
-        public int SupportType { internal set; get; }
+        public Vector3d Force {  set; get; }
+        public int SupportType {  set; get; }
         public double Mass { set; get; }
         public ProtoNode(Point3d P0)
         {
